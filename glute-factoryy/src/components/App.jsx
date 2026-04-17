@@ -766,21 +766,7 @@ const Login = () => {
           </Btn>
         </Card>
 
-        {/* Demo */}
-        <div style={{ marginTop: 14, padding: "14px 16px", background: "rgba(30,155,191,0.04)", border: `1px solid rgba(30,155,191,0.1)`, borderRadius: 12 }}>
-          <div style={{ color: t.textDim, fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 8 }}>ACCESOS DEMO</div>
-          {[
-            {label:"Admin – Pol",  u:"Pol",    p:"12345"},
-            {label:"Carlos",       u:"carlos", p:"carlos123"},
-            {label:"Laura",        u:"laura",  p:"laura123"},
-            {label:"Miguel",       u:"miguel", p:"mig123"},
-          ].map(acc => (
-            <button key={acc.u} onClick={() => { setUser(acc.u); setPass(acc.p); }}
-              style={{ display: "block", background: "none", border: "none", cursor: "pointer", padding: "5px 0", color: t.textSub, fontSize: 13, textAlign: "left", fontFamily: "inherit" }}>
-              <span style={{ color: t.accent, fontWeight: 700 }}>{acc.label}:</span> {acc.u} / {acc.p}
-            </button>
-          ))}
-        </div>
+        {/* Demo block removed — credentials managed by admin only */}
       </div>
     </div>
   );
