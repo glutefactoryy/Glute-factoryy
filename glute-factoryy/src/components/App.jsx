@@ -1,4 +1,4 @@
-import { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
+import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -12,10 +12,18 @@ const SB_H = {
   "Content-Type": "application/json",
 };
 
+// Fetch with timeout to prevent infinite hangs
+const fetchWithTimeout = (url, options = {}, ms = 8000) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+};
+
 const sb = {
   async select(table, q = "") {
     try {
-      const r = await fetch(`${SB_URL}/rest/v1/${table}${q}`, { headers: SB_H });
+      const r = await fetchWithTimeout(`${SB_URL}/rest/v1/${table}${q}`, { headers: SB_H });
       if (!r.ok) return [];
       return await r.json();
     } catch { return []; }
@@ -23,7 +31,7 @@ const sb = {
   async upsert(table, data, onConflict = "") {
     try {
       const qs = onConflict ? `?on_conflict=${onConflict}` : "";
-      const r = await fetch(`${SB_URL}/rest/v1/${table}${qs}`, {
+      const r = await fetchWithTimeout(`${SB_URL}/rest/v1/${table}${qs}`, {
         method: "POST",
         headers: { ...SB_H, "Prefer": "resolution=merge-duplicates,return=representation" },
         body: JSON.stringify(data),
@@ -38,7 +46,7 @@ const sb = {
   },
   async insert(table, data) {
     try {
-      const r = await fetch(`${SB_URL}/rest/v1/${table}`, {
+      const r = await fetchWithTimeout(`${SB_URL}/rest/v1/${table}`, {
         method: "POST",
         headers: { ...SB_H, "Prefer": "return=representation" },
         body: JSON.stringify(data),
@@ -49,7 +57,7 @@ const sb = {
   },
   async remove(table, col, val) {
     try {
-      await fetch(`${SB_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`, {
+      await fetchWithTimeout(`${SB_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`, {
         method: "DELETE", headers: SB_H,
       });
     } catch {}
@@ -2190,17 +2198,23 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
 
 // ─── Week utilities ───────────────────────────────────────────────────────────
 const getWeekNumber = (startDate) => {
-  const start = new Date(startDate);
-  const now = new Date();
-  return Math.max(1, Math.floor((now - start) / (7 * 24 * 60 * 60 * 1000)) + 1);
+  try {
+    const start = new Date(startDate);
+    if (isNaN(start.getTime())) return 1;
+    const now = new Date();
+    return Math.max(1, Math.floor((now - start) / (7 * 24 * 60 * 60 * 1000)) + 1);
+  } catch { return 1; }
 };
 
 const getWeekDateRange = (startDate, weekNum) => {
-  const start = new Date(startDate);
-  const ws = new Date(start.getTime() + (weekNum - 1) * 7 * 24 * 60 * 60 * 1000);
-  const we = new Date(ws.getTime() + 6 * 24 * 60 * 60 * 1000);
-  const fmt = d => `${d.getDate()}/${d.getMonth() + 1}`;
-  return `${fmt(ws)} – ${fmt(we)}`;
+  try {
+    const start = new Date(startDate);
+    if (isNaN(start.getTime())) return "";
+    const ws = new Date(start.getTime() + (weekNum - 1) * 7 * 24 * 60 * 60 * 1000);
+    const we = new Date(ws.getTime() + 6 * 24 * 60 * 60 * 1000);
+    const fmt = d => `${d.getDate()}/${d.getMonth() + 1}`;
+    return `${fmt(ws)} – ${fmt(we)}`;
+  } catch { return ""; }
 };
 
 const ciKey = (clientId, weekNum) => `checkin:${clientId}:${weekNum}`;
@@ -2715,6 +2729,50 @@ const Empty = ({ icon, text }) => (
   </div>
 );
 
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  render() {
+    if (this.state.hasError) return (
+      <div style={{ minHeight: "100vh", background: "#07090f", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+        <div style={{ fontSize: 40, marginBottom: 16 }}>⚠️</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "#edf2f7", marginBottom: 8 }}>Algo salió mal</div>
+        <div style={{ fontSize: 14, color: "#6b8ea8", marginBottom: 24, textAlign: "center" }}>La app encontró un error inesperado.</div>
+        <button onClick={() => window.location.reload()}
+          style={{ background: "linear-gradient(135deg, #1E9BBF, #14708a)", color: "white", border: "none", borderRadius: 12, padding: "13px 24px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+          Recargar app
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+// ─── LOADING SCREEN ───────────────────────────────────────────────────────────
+const LoadingScreen = ({ retry, error }) => (
+  <div style={{ minHeight: "100vh", background: "#07090f", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div style={{ width: 72, height: 72, borderRadius: 20, background: "linear-gradient(135deg, #1E9BBF, #0d5f75)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 8px 32px rgba(30,155,191,0.35)", marginBottom: 20 }}>
+      <svg width="42" height="42" viewBox="0 0 42 42" fill="none">
+        <polyline points="4,30 10,30 15,18 21,34 27,10 33,30 38,30" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+        <polyline points="21,10 21,4 17,8" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    </div>
+    <div style={{ fontSize: 24, fontWeight: 900, color: "#1E9BBF", letterSpacing: "-0.02em", marginBottom: 8 }}>Glute Factoryy</div>
+    {error ? (
+      <>
+        <div style={{ fontSize: 14, color: "#e05a5a", marginBottom: 20, textAlign: "center" }}>No se pudo conectar. Revisa tu conexión.</div>
+        <button onClick={retry}
+          style={{ background: "linear-gradient(135deg, #1E9BBF, #14708a)", color: "white", border: "none", borderRadius: 12, padding: "13px 24px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+          Reintentar
+        </button>
+      </>
+    ) : (
+      <div style={{ fontSize: 14, color: "#6b8ea8", animation: "pulse 1.5s infinite" }}>Conectando...</div>
+    )}
+  </div>
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2722,10 +2780,12 @@ export default function App() {
   const [db, setDb] = useState(INITIAL_DB);
   const [currentUser, setCurrentUser] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [appReady, setAppReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
-  // Load all shared data from Supabase and merge into local state
   const loadFromSupabase = useCallback(async () => {
     setSyncing(true);
+    setLoadError(false);
     try {
       const [clients, weights, notes, clientData, checkins] = await Promise.all([
         sb.select("clients", "?select=*&order=created_at"),
@@ -2735,19 +2795,31 @@ export default function App() {
         sb.select("checkins", "?select=*&order=week_number.desc"),
       ]);
       setDb(prev => mergeSupabaseIntoDb(prev, { clients, weights, notes, clientData, checkins }));
-    } catch (e) { console.error("Supabase load error:", e); }
+    } catch (e) {
+      console.error("Supabase load error:", e);
+      setLoadError(true);
+    }
     setSyncing(false);
   }, []);
 
+  // Initial load on mount
+  useEffect(() => {
+    const init = async () => {
+      try {
+        await loadFromSupabase();
+      } catch {}
+      setAppReady(true);
+    };
+    init();
+  }, []);
+
   const login = useCallback(async (email, password) => {
-    // Check local users (clients)
     const localUser = db.users.find(u => u.email === email && u.password === password);
     if (localUser) {
       setCurrentUser(localUser);
       await loadFromSupabase();
       return true;
     }
-    // Check admins table in Supabase
     try {
       const admins = await sb.select("admins", `?email=eq.${encodeURIComponent(email)}&password=eq.${encodeURIComponent(password)}`);
       if (admins?.length) {
@@ -2764,15 +2836,20 @@ export default function App() {
 
   const logout = useCallback(() => setCurrentUser(null), []);
 
+  // Show loading screen until app is ready
+  if (!appReady) return <LoadingScreen error={loadError} retry={() => { setAppReady(false); loadFromSupabase().then(() => setAppReady(true)); }}/>;
+
   return (
-    <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase }}>
-      <GlobalStyles/>
-      {!currentUser
-        ? <Login/>
-        : (currentUser.role === "superadmin" || currentUser.role === "admin")
-          ? <AdminApp/>
-          : <ClientApp/>
-      }
-    </Ctx.Provider>
+    <ErrorBoundary>
+      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase }}>
+        <GlobalStyles/>
+        {!currentUser
+          ? <Login/>
+          : (currentUser.role === "superadmin" || currentUser.role === "admin")
+            ? <AdminApp/>
+            : <ClientApp/>
+        }
+      </Ctx.Provider>
+    </ErrorBoundary>
   );
 }
