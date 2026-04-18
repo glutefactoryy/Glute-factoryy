@@ -78,6 +78,7 @@ const mapCheckinRow = r => {
   }
   return {
     weight: r.weight_kg ? parseFloat(r.weight_kg) : null,
+    photo: r.photo_url || null,
     dietCompliance: r.diet_compliance ?? 0,
     trainingCompliance: r.training_compliance ?? 0,
     cardioCompliance: r.cardio_compliance ?? 0,
@@ -203,21 +204,26 @@ const GlobalStyles = () => (
 
 // ─── LOGO ─────────────────────────────────────────────────────────────────────
 const GFLogo = ({ size = "md" }) => {
-  const scale = size === "sm" ? 0.55 : size === "lg" ? 1.3 : 1;
-  const w = Math.round(160 * scale);
-  const h = Math.round(80 * scale);
+  if (size === "sm") return (
+    <span style={{ fontSize: 13, fontWeight: 800, color: t.accent, letterSpacing: "-0.01em" }}>
+      Glute Factoryy
+    </span>
+  );
+
+  // lg / md — full logo with icon
+  const scale = size === "lg" ? 1 : 0.8;
   return (
-    <svg width={w} height={h} viewBox="0 0 160 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* "Glute" text - top row */}
-      <text x="0" y="32" fontFamily="'Plus Jakarta Sans', sans-serif" fontWeight="700" fontSize="36" fill="#1E9BBF" letterSpacing="-1">Glute</text>
-      {/* Arrow up */}
-      <line x1="6" y1="72" x2="6" y2="48" stroke="#1E9BBF" strokeWidth="3" strokeLinecap="round"/>
-      <polyline points="1,54 6,46 11,54" fill="none" stroke="#1E9BBF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-      {/* Heartbeat / pulse line */}
-      <polyline points="6,72 18,72 24,58 30,78 36,50 42,72 54,72 60,68 66,72" fill="none" stroke="#1E9BBF" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-      {/* "factoryy" text - bottom row */}
-      <text x="18" y="76" fontFamily="'Plus Jakarta Sans', sans-serif" fontWeight="600" fontSize="28" fill="#1E9BBF" letterSpacing="-0.5">factoryy</text>
-    </svg>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+      <div style={{ width: Math.round(72*scale), height: Math.round(72*scale), borderRadius: Math.round(20*scale), background: "linear-gradient(135deg, #1E9BBF, #0d5f75)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 8px 32px rgba(30,155,191,0.35)" }}>
+        <svg width={Math.round(42*scale)} height={Math.round(42*scale)} viewBox="0 0 42 42" fill="none">
+          <polyline points="4,30 10,30 15,18 21,34 27,10 33,30 38,30" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+          <polyline points="21,10 21,4 17,8" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </div>
+      <div style={{ fontSize: Math.round(32*scale), fontWeight: 900, color: t.accent, letterSpacing: "-0.03em", lineHeight: 1 }}>
+        Glute Factoryy
+      </div>
+    </div>
   );
 };
 
@@ -881,7 +887,7 @@ const ClientApp = () => {
         </div>
 
         <div style={{ padding: "16px 16px 0" }} className="fade-up">
-          {tab === "home"     && <CHome     client={client} weights={weights} notes={notes} />}
+          {tab === "home"     && <CHome     client={client} weights={weights} notes={notes} db={db} onGoToCheckin={() => setTab("tracking")} />}
           {tab === "routine"  && <CRoutine  routine={routine} />}
           {tab === "diet"     && <CDiet     diet={diet} />}
           {tab === "weight"   && <CWeight   client={client} weights={weights} db={db} setDb={setDb} />}
@@ -908,15 +914,35 @@ const ClientApp = () => {
   );
 };
 
-const CHome = ({ client, weights, notes }) => {
+const CHome = ({ client, weights, notes, db, onGoToCheckin }) => {
   const lastW = weights.slice(-1)[0];
   const prevW = weights.slice(-2,-1)[0];
   const diff  = lastW && prevW ? (lastW.weight - prevW.weight).toFixed(1) : null;
   const weeks = Math.floor((new Date() - new Date(client.startDate)) / 86400000 / 7);
   const lastNote = notes[0];
 
+  // Check if check-in is pending this week
+  const currentWeek = getWeekNumber(client.startDate);
+  const hasCheckin = !!(db?.checkins?.[client.id]?.[currentWeek]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+      {/* Check-in reminder banner */}
+      {!hasCheckin && (
+        <div style={{ background: "linear-gradient(135deg, rgba(30,155,191,0.1), rgba(30,155,191,0.04))", border: "1.5px solid rgba(30,155,191,0.25)", borderRadius: 16, padding: "16px 18px", display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <span style={{ fontSize: 26, flexShrink: 0, marginTop: 2 }}>⚡</span>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 4 }}>Check-in pendiente</div>
+            <div style={{ fontSize: 13, color: t.textSub, lineHeight: 1.5, marginBottom: 12 }}>Tu coach está esperando tus datos de esta semana. Solo tarda 2 minutos.</div>
+            <button onClick={onGoToCheckin}
+              style={{ background: `linear-gradient(135deg, ${t.accent}, ${t.accentDim})`, color: "white", border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", boxShadow: `0 4px 12px ${t.accentGlow}` }}>
+              Hacer check-in ahora →
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Goal banner */}
       <div style={{ background: `linear-gradient(135deg, rgba(30,155,191,0.15), rgba(30,155,191,0.05))`, border: `1px solid rgba(30,155,191,0.2)`, borderRadius: 16, padding: "16px 18px", display: "flex", alignItems: "center", gap: 14 }}>
         <div style={{ width: 42, height: 42, borderRadius: 12, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", color: t.accent, flexShrink: 0 }}>
@@ -1506,7 +1532,18 @@ const AdminApp = () => {
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins }) => (
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins }) => {
+  const [filter, setFilter] = useState("all"); // all | done | pending
+
+  const filtered = clients.filter(c => {
+    const currentWeek = getWeekNumber(c.startDate);
+    const hasCheckin = !!(db.checkins?.[c.id]?.[currentWeek]);
+    if (filter === "done") return hasCheckin;
+    if (filter === "pending") return !hasCheckin;
+    return true;
+  });
+
+  return (
   <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
     {/* Stats */}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
@@ -1530,6 +1567,16 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       <Btn onClick={onNew} style={{ paddingLeft: 16, paddingRight: 16 }}><Icon n="plus" s={18}/></Btn>
     </div>
 
+    {/* Filter buttons */}
+    <div style={{ display: "flex", gap: 8 }}>
+      {[["all","Todos"],["done","✅ Con check-in"],["pending","⏳ Pendientes"]].map(([val, lbl]) => (
+        <button key={val} onClick={() => setFilter(val)}
+          style={{ background: filter===val ? t.accentAlpha : t.bgCard, border: `1.5px solid ${filter===val ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "8px 14px", color: filter===val ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s" }}>
+          {lbl}
+        </button>
+      ))}
+    </div>
+
     {/* Superadmin: manage admins button */}
     {isSuperAdmin && (
       <button onClick={onAdmins}
@@ -1544,21 +1591,44 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
     )}
 
     {/* List */}
-    {clients.length === 0 && <Empty icon="users" text="Sin clientes"/>}
-    {clients.map(c => {
+    {filtered.length === 0 && <Empty icon="users" text={filter==="done" ? "Ningún cliente ha hecho check-in esta semana" : filter==="pending" ? "Todos los clientes han hecho check-in 🎉" : "Sin clientes"}/>}
+    {filtered.map(c => {
       const lastW = (db.weightHistory[c.id]||[]).slice(-1)[0];
+      const currentWeek = getWeekNumber(c.startDate);
+      const hasCheckin = !!(db.checkins?.[c.id]?.[currentWeek]);
+      // Calculate streak
+      const clientCheckins = db.checkins?.[c.id] || {};
+      let streak = 0;
+      for (let w = currentWeek; w >= 1; w--) {
+        if (clientCheckins[w]) streak++;
+        else break;
+      }
       return (
         <Card key={c.id} onClick={() => onSel(c.id)}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <Av initials={c.avatar} size={50}/>
+            <div style={{ position: "relative" }}>
+              <Av initials={c.avatar} size={50}/>
+              <div style={{ position: "absolute", bottom: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: hasCheckin ? t.accent : t.bgElevated, border: `2px solid ${t.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8 }}>
+                {hasCheckin ? "✓" : ""}
+              </div>
+            </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div style={{ fontSize: 16, fontWeight: 800, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{c.name}</div>
-                <Pill color="accent">Activo</Pill>
+                <Pill color={hasCheckin ? "accent" : "default"}>
+                  {hasCheckin ? "✅ Check-in" : "⏳ Pendiente"}
+                </Pill>
               </div>
               <div style={{ fontSize: 13, color: t.textSub, marginTop: 3 }}>{c.email}</div>
-              <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>
-                {c.goal}{lastW ? ` · ${lastW.weight} kg` : ""}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <span style={{ fontSize: 12, color: t.textDim }}>
+                  {c.goal}{lastW ? ` · ${lastW.weight} kg` : ""}
+                </span>
+                {streak >= 2 && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#f0a030" }}>
+                    🔥 {streak} sem.
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -1566,7 +1636,8 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       );
     })}
   </div>
-);
+  );
+};
 
 const ADetail = ({ client, db, setDb, onDel }) => {
   const [tab, setTab] = useState("profile");
@@ -2401,26 +2472,49 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved }) => {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [preview, setPreview] = useState(null);
+  const [photoFile, setPhotoFile] = useState(null);
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
   const handlePhoto = e => {
     const file = e.target.files[0];
     if (!file) return;
+    setPhotoFile(file);
     const reader = new FileReader();
-    reader.onload = ev => { set("photo", ev.target.result); setPreview(ev.target.result); };
+    reader.onload = ev => { setPreview(ev.target.result); };
     reader.readAsDataURL(file);
+  };
+
+  const uploadPhoto = async (file, clientId, weekNum) => {
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `${clientId}/semana-${weekNum}.${ext}`;
+      const res = await fetch(`${SB_URL}/storage/v1/object/checkin-photos/${path}`, {
+        method: "POST",
+        headers: {
+          "apikey": SB_KEY,
+          "Authorization": `Bearer ${SB_KEY}`,
+          "Content-Type": file.type || "image/jpeg",
+          "x-upsert": "true",
+        },
+        body: file,
+      });
+      if (!res.ok) { console.error("Photo upload failed:", await res.text()); return null; }
+      return `${SB_URL}/storage/v1/object/public/checkin-photos/${path}`;
+    } catch (e) { console.error("Photo upload error:", e); return null; }
   };
 
   const handleSave = async () => {
     setSaving(true);
     setSaveError("");
 
-    if (!window?.storage) {
-      // No window.storage — use Supabase only
-    }
-
     const checkin = { ...form, weekNum, savedAt: new Date().toISOString() };
     try {
+      // Upload photo to Supabase Storage if present
+      let photoUrl = null;
+      if (photoFile) {
+        photoUrl = await uploadPhoto(photoFile, client.id, weekNum);
+      }
+
       const sbData = {
         client_id: client.id,
         week_number: weekNum,
@@ -2433,6 +2527,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved }) => {
         sleep_quality: form.sleep || null,
         training_feel: form.trainingFeel || null,
         discomfort: form.discomfort || null,
+        photo_url: photoUrl,
         comment: [
           form.comment || "",
           form.externalFactors?.length ? `[Factores: ${form.externalFactors.join(", ")}]` : ""
