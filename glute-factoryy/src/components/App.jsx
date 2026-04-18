@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.5";
+const APP_VERSION = "3.6";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2938,9 +2938,14 @@ const CTracking = ({ client, db, setDb }) => {
     ...Object.keys(checkins),
     thisWeekKey,
     lastWeekKey,
-  ])].sort((a, b) => b.localeCompare(a));
+  ])].sort((a, b) => a.localeCompare(b));
 
-  const visibleKeys = showAll ? allKeys : allKeys.slice(0, 6);
+  // Assign sequential week numbers based on order of first submission
+  const doneKeys = allKeys.filter(k => !!checkins[k]).sort((a, b) => a.localeCompare(b));
+  const weekNumMap = {}; // weekKey -> sequential number
+  doneKeys.forEach((k, i) => { weekNumMap[k] = i + 1; });
+
+  const visibleKeys = showAll ? [...allKeys].reverse() : [...allKeys].reverse().slice(0, 6);
 
   return (
     <div>
@@ -3007,6 +3012,8 @@ const CTracking = ({ client, db, setDb }) => {
           } catch { return new Date(); }
         })();
         const range = getCalWeekRange(weekDate);
+        const seqNum = weekNumMap[weekKey];
+        const weekLabel = seqNum ? `Semana ${seqNum} · ${range}` : range;
 
         return (
           <div key={weekKey} style={{ borderRadius: 16, border: `1.5px solid ${isOpen ? "rgba(30,155,191,0.35)" : done ? "rgba(30,155,191,0.18)" : t.border}`, background: t.bgCard, marginBottom: 10, overflow: "hidden" }}>
@@ -3017,7 +3024,7 @@ const CTracking = ({ client, db, setDb }) => {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{range}</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{weekLabel}</span>
                   {isThisWeek && !done && <Pill color="accent">Esta semana</Pill>}
                   {done && <Pill color="accent">✓ Completada</Pill>}
                 </div>
@@ -3063,7 +3070,11 @@ const CTracking = ({ client, db, setDb }) => {
 const ATrackingTab = ({ client }) => {
   const { db, loadFromSupabase, syncing } = useApp();
   const clientCheckins = (db.checkins || {})[client.id] || {};
-  const completed = Object.entries(clientCheckins).sort((a, b) => b[0].localeCompare(a[0]));
+  const completed = Object.entries(clientCheckins).sort((a, b) => a[0].localeCompare(b[0]));
+  // Assign sequential numbers by submission order
+  const weekNumMap = {};
+  completed.forEach(([k], i) => { weekNumMap[k] = i + 1; });
+  const completedDesc = [...completed].reverse();
   const cc = v => v >= 80 ? t.accent : v >= 50 ? t.warn : t.danger;
 
   return (
@@ -3081,12 +3092,23 @@ const ATrackingTab = ({ client }) => {
 
       {completed.length === 0 && <Empty icon="lightning" text="El cliente aún no ha completado ningún check-in"/>}
 
-      {completed.map(([weekNum, ci]) => (
+      {completedDesc.map(([weekNum, ci]) => {
+        const seqNum = weekNumMap[weekNum];
+        const weekDate = (() => {
+          try {
+            const [year, week] = weekNum.split("-").map(Number);
+            const jan1 = new Date(year, 0, 1);
+            return getMonday(new Date(jan1.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000));
+          } catch { return new Date(); }
+        })();
+        const range = weekNum.includes("-") ? getCalWeekRange(weekDate) : `Semana ${weekNum}`;
+        const title = seqNum ? `Semana ${seqNum}` : range;
+        return (
         <Card key={weekNum} style={{ marginBottom: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>{weekNum.includes("-") ? getCalWeekRange((() => { try { const [y,w] = weekNum.split("-").map(Number); const jan1 = new Date(y,0,1); return getMonday(new Date(jan1.getTime()+(w-1)*7*24*60*60*1000)); } catch { return new Date(); } })()) : `Semana ${weekNum}`}</div>
-              <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{weekNum}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>{title}</div>
+              <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{range}</div>
             </div>
             {ci.weight && (
               <div style={{ textAlign: "right" }}>
