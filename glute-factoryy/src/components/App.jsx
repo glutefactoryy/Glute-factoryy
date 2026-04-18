@@ -3229,7 +3229,8 @@ const ATrackingTab = ({ client }) => {
             </div>
           )}
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 };
