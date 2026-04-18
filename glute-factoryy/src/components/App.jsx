@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.6";
+const APP_VERSION = "3.8";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1473,15 +1473,31 @@ const AdminManagement = ({ onBack }) => {
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: t.text }}>{a.name}</div>
               <div style={{ fontSize: 12, color: t.textSub }}>@{a.email}</div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>
+                {a.password_changed ? "🔒 Contraseña personalizada" : `🔑 ${a.password || "—"}`}
+              </div>
             </div>
             <Pill color={a.role === "superadmin" ? "accent" : "default"}>
               {a.role === "superadmin" ? "⭐ Super" : "Admin"}
             </Pill>
             {a.id !== currentUser.id && (
-              <button onClick={() => remove(a.id)}
-                style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.danger }}>
-                <Icon n="trash" s={14}/>
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={async () => {
+                  const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+                  const pwd = Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+                  await sb.upsert("admins", { id: a.id, name: a.name, email: a.email, password: pwd, role: a.role, password_changed: false });
+                  setAdmins(p => p.map(x => x.id === a.id ? { ...x, password: pwd, password_changed: false } : x));
+                  navigator.clipboard?.writeText(pwd);
+                  alert(`Nueva contraseña: ${pwd}\n(Ya copiada al portapapeles)`);
+                }}
+                  style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.3)`, borderRadius: 8, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.accent, fontSize: 14 }}>
+                  🔄
+                </button>
+                <button onClick={() => remove(a.id)}
+                  style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, minWidth: 36, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.danger }}>
+                  <Icon n="trash" s={14}/>
+                </button>
+              </div>
             )}
           </div>
         </Card>
@@ -1492,13 +1508,65 @@ const AdminManagement = ({ onBack }) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ─── AdminOnboarding — first login password change ────────────────────────────
+const AdminOnboarding = ({ onDone }) => {
+  const { currentUser, setCurrentUser, db, setDb } = useApp();
+  const [newPass, setNewPass] = useState("");
+  const [newPass2, setNewPass2] = useState("");
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!newPass) { setErr("Introduce una contraseña"); return; }
+    if (newPass.length < 6) { setErr("Mínimo 6 caracteres"); return; }
+    if (newPass !== newPass2) { setErr("Las contraseñas no coinciden"); return; }
+    setSaving(true);
+    const updated = { ...currentUser, password: newPass, passwordChanged: true };
+    await sb.upsert("admins", { id: currentUser.id, name: currentUser.name, email: currentUser.email, password: newPass, role: currentUser.role, password_changed: true });
+    setCurrentUser(updated);
+    setDb(p => ({ ...p, users: p.users.map(u => u.id === currentUser.id ? updated : u) }));
+    setSaving(false);
+    onDone();
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: t.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 20px" }}>
+      <div style={{ width: "100%", maxWidth: 380 }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <div style={{ fontSize: 28, fontWeight: 900, color: t.text, letterSpacing: "-0.03em", marginBottom: 8 }}>
+            ¡Bienvenido, {currentUser.name}! 👋
+          </div>
+          <div style={{ fontSize: 15, color: t.textSub, lineHeight: 1.6 }}>
+            Es tu primera vez. Elige una contraseña personal para acceder en el futuro.
+          </div>
+        </div>
+        <Card accent style={{ padding: "28px 24px" }}>
+          <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 16 }}>ELIGE TU CONTRASEÑA</div>
+          <Field label="NUEVA CONTRASEÑA" value={newPass} onChange={setNewPass} type="password" placeholder="Mínimo 6 caracteres"/>
+          <Field label="REPETIR CONTRASEÑA" value={newPass2} onChange={setNewPass2} type="password" placeholder="Repite la contraseña"/>
+          {err && <div style={{ color: t.danger, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+          <Btn onClick={save} disabled={saving} full>
+            {saving ? "Guardando..." : "Continuar →"}
+          </Btn>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
 const AdminApp = () => {
   const { db, setDb, logout, syncing, loadFromSupabase, currentUser } = useApp();
   const [view, setView] = useState("list");
   const [selId, setSelId] = useState(null);
   const [q, setQ] = useState("");
+  const [onboarded, setOnboarded] = useState(false);
 
   const isSuperAdmin = currentUser?.role === "superadmin";
+
+  // Show onboarding if admin hasn't changed password yet (except Pol/superadmin)
+  const needsOnboarding = currentUser?.role === "admin" && !currentUser?.passwordChanged && !onboarded;
+  if (needsOnboarding) return <AdminOnboarding onDone={() => setOnboarded(true)}/>;
+
   const filtered = db.clients.filter(c => c.name.toLowerCase().includes(q.toLowerCase()) || (c.email||"").toLowerCase().includes(q.toLowerCase()));
   const sel = db.clients.find(c => c.id === selId);
 
@@ -3271,7 +3339,7 @@ export default function App() {
       const admins = await sb.select("admins", `?email=eq.${encodeURIComponent(email)}&password=eq.${encodeURIComponent(password)}`);
       if (admins?.length) {
         const a = admins[0];
-        const adminUser = { id: a.id, email: a.email, password: a.password, role: a.role, name: a.name };
+        const adminUser = { id: a.id, email: a.email, password: a.password, role: a.role, name: a.name, passwordChanged: a.password_changed || false };
         setDb(p => ({ ...p, users: p.users.find(u => u.id === a.id) ? p.users : [...p.users, adminUser] }));
         setCurrentUser(adminUser);
         await loadFromSupabase();
