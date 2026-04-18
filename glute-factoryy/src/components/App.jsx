@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.2";
+const APP_VERSION = "3.3";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -111,9 +111,25 @@ const mergeSupabaseIntoDb = (prev, { clients, weights, notes, clientData, checki
       status: c.status || "active",
       startDate: c.start_date || new Date().toISOString().slice(0, 10),
       avatar: c.avatar || (c.name || "??").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
+      password: c.password || "",
+      passwordChanged: c.password_changed || false,
     }));
     const ids = new Set(sbClients.map(c => c.id));
     next.clients = [...prev.clients.filter(c => !ids.has(c.id)), ...sbClients];
+
+    // Also populate db.users so clients can login
+    const sbUsers = sbClients
+      .filter(c => c.email && c.password)
+      .map(c => ({
+        id: c.userId, email: c.email, password: c.password,
+        role: "client", name: c.name, clientId: c.id,
+      }));
+    const userIds = new Set(sbUsers.map(u => u.id));
+    const userEmails = new Set(sbUsers.map(u => u.email));
+    next.users = [
+      ...prev.users.filter(u => !userIds.has(u.id) && !userEmails.has(u.email)),
+      ...sbUsers,
+    ];
   }
 
   if (weights?.length) {
@@ -827,7 +843,7 @@ const ClientPasswordChange = ({ client, db, setDb, onDone }) => {
       clients: p.clients.map(c => c.id === client.id ? { ...c, password: newPass, passwordChanged: true } : c),
       users: p.users.map(u => u.clientId === client.id ? { ...u, password: newPass } : u),
     }));
-    await sb.upsert("clients", { id: client.id, user_id: client.userId, name: client.name, email: client.email, password_changed: true });
+    await sb.upsert("clients", { id: client.id, user_id: client.userId, name: client.name, email: client.email, password: newPass, password_changed: true });
     setSaved(true);
     setTimeout(() => { setSaved(false); onDone(); }, 1500);
   };
@@ -1752,7 +1768,7 @@ const AEditProfile = ({ client, db, setDb }) => {
       clients: p.clients.map(c => c.id === client.id ? updated : c),
       users: p.users.map(u => u.clientId === client.id ? { ...u, password: pwd } : u),
     }));
-    await sb.upsert("clients", { id: client.id, user_id: client.userId || client.id, name: client.name, email: client.email, password_changed: false });
+    await sb.upsert("clients", { id: client.id, user_id: client.userId || client.id, name: client.name, email: client.email, password: pwd, password_changed: false });
   };
 
   const copyPassword = () => {
@@ -2296,6 +2312,7 @@ const ANewClient = ({ db, setDb, onDone }) => {
     }));
     await sb.upsert("clients", {
       id, user_id: uid, name: f.name, email: f.email,
+      password: f.password, password_changed: false,
       status: "active", start_date: startDate, avatar,
     });
     onDone();
@@ -3125,12 +3142,14 @@ export default function App() {
   }, []);
 
   const login = useCallback(async (email, password) => {
+    // 1. Check local users (already loaded from Supabase)
     const localUser = db.users.find(u => u.email === email && u.password === password);
     if (localUser) {
       setCurrentUser(localUser);
       await loadFromSupabase();
       return true;
     }
+    // 2. Check admins table in Supabase
     try {
       const admins = await sb.select("admins", `?email=eq.${encodeURIComponent(email)}&password=eq.${encodeURIComponent(password)}`);
       if (admins?.length) {
@@ -3138,6 +3157,21 @@ export default function App() {
         const adminUser = { id: a.id, email: a.email, password: a.password, role: a.role, name: a.name };
         setDb(p => ({ ...p, users: p.users.find(u => u.id === a.id) ? p.users : [...p.users, adminUser] }));
         setCurrentUser(adminUser);
+        await loadFromSupabase();
+        return true;
+      }
+    } catch {}
+    // 3. Check clients table directly in Supabase (fallback if not yet loaded)
+    try {
+      const clients = await sb.select("clients", `?email=eq.${encodeURIComponent(email)}&password=eq.${encodeURIComponent(password)}`);
+      if (clients?.length) {
+        const c = clients[0];
+        const clientUser = {
+          id: c.user_id || c.id, email: c.email, password: c.password,
+          role: "client", name: c.name, clientId: c.id,
+        };
+        setDb(p => ({ ...p, users: p.users.find(u => u.id === clientUser.id) ? p.users : [...p.users, clientUser] }));
+        setCurrentUser(clientUser);
         await loadFromSupabase();
         return true;
       }
