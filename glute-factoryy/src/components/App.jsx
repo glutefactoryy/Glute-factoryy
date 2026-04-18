@@ -776,11 +776,53 @@ const Login = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── ClientPasswordChange ─────────────────────────────────────────────────────
+const ClientPasswordChange = ({ client, db, setDb, onDone }) => {
+  const [current, setCurrent] = useState("");
+  const [newPass, setNewPass] = useState("");
+  const [newPass2, setNewPass2] = useState("");
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const save = async () => {
+    setErr("");
+    if (!current) { setErr("Introduce tu contraseña actual"); return; }
+    const user = db.users.find(u => u.clientId === client.id);
+    if (user?.password !== current) { setErr("La contraseña actual no es correcta"); return; }
+    if (!newPass) { setErr("Introduce la nueva contraseña"); return; }
+    if (newPass.length < 6) { setErr("Mínimo 6 caracteres"); return; }
+    if (newPass !== newPass2) { setErr("Las contraseñas no coinciden"); return; }
+
+    setDb(p => ({
+      ...p,
+      clients: p.clients.map(c => c.id === client.id ? { ...c, password: newPass, passwordChanged: true } : c),
+      users: p.users.map(u => u.clientId === client.id ? { ...u, password: newPass } : u),
+    }));
+    await sb.upsert("clients", { id: client.id, user_id: client.userId, name: client.name, email: client.email, password_changed: true });
+    setSaved(true);
+    setTimeout(() => { setSaved(false); onDone(); }, 1500);
+  };
+
+  return (
+    <Card>
+      <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 16 }}>CAMBIAR CONTRASEÑA</div>
+      <Field label="CONTRASEÑA ACTUAL" value={current} onChange={setCurrent} type="password"/>
+      <Field label="NUEVA CONTRASEÑA" value={newPass} onChange={setNewPass} type="password" placeholder="Mínimo 6 caracteres"/>
+      <Field label="REPETIR NUEVA CONTRASEÑA" value={newPass2} onChange={setNewPass2} type="password"/>
+      {err && <div style={{ color: t.danger, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+      {saved && <div style={{ color: t.accent, fontSize: 13, marginBottom: 12 }}>✅ Contraseña actualizada</div>}
+      <Btn onClick={save} full>{saved ? "✓ Guardada" : "Cambiar contraseña"}</Btn>
+    </Card>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ─── CLIENT APP ───────────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 const ClientApp = () => {
   const { currentUser, db, setDb, logout } = useApp();
   const [tab, setTab] = useState("home");
+  const [showSettings, setShowSettings] = useState(false);
   const client = db.clients.find(c => c.id === currentUser.clientId);
   if (!client) return null;
 
@@ -795,6 +837,17 @@ const ClientApp = () => {
     return <ClientOnboarding client={client} db={db} setDb={setDb} onDone={() => {}} />;
   }
 
+  // Client settings — change password
+  if (showSettings) return (
+    <div style={{ minHeight: "100vh", background: t.bg, maxWidth: 430, margin: "0 auto", padding: "52px 20px 40px" }}>
+      <button onClick={() => setShowSettings(false)} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 20 }}>Mis ajustes</div>
+      <ClientPasswordChange client={client} db={db} setDb={setDb} onDone={() => setShowSettings(false)}/>
+    </div>
+  );
+
   const navItems = [
     { id: "home",     icon: "home",      label: "Inicio"  },
     { id: "routine",  icon: "dumbbell",  label: "Rutina"  },
@@ -806,9 +859,7 @@ const ClientApp = () => {
 
   return (
     <div style={{ minHeight: "100vh", background: t.bg, maxWidth: 430, margin: "0 auto", display: "flex", flexDirection: "column" }}>
-      {/* Scrollable body */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: "calc(90px + env(safe-area-inset-bottom, 0px))" }}>
-        {/* Header */}
         <div style={{ padding: "52px 20px 20px", background: `linear-gradient(180deg, rgba(30,155,191,0.08) 0%, transparent 100%)`, borderBottom: `1px solid ${t.border}`, marginBottom: 4 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
@@ -820,9 +871,12 @@ const ClientApp = () => {
               {tab === "notes"    && <div style={{ fontSize: 22, fontWeight: 900, color: t.text, letterSpacing: "-0.03em" }}>Seguimiento</div>}
               {tab === "tracking" && <div style={{ fontSize: 22, fontWeight: 900, color: t.text, letterSpacing: "-0.03em" }}>Check-in ⚡</div>}
             </div>
-            <button onClick={logout} style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 12, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.textSub }}>
-              <Icon n="logout" s={17}/>
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowSettings(true)} style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 12, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.textSub, fontSize: 18 }}>⚙️</button>
+              <button onClick={logout} style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 12, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.textSub }}>
+                <Icon n="logout" s={17}/>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1572,11 +1626,15 @@ const SaveBtn = ({ onSave, saved }) => (
 const AEditProfile = ({ client, db, setDb }) => {
   const [f, setF] = useState({...client});
   const [saved, setSaved] = useState(false);
-  useEffect(() => { setF({...client}); setSaved(false); }, [client.id]);
+  const [resetDone, setResetDone] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => { setF({...client}); setSaved(false); setResetDone(false); setNewPassword(""); }, [client.id]);
+
   const save = async () => {
     setDb(p=>({...p,clients:p.clients.map(c=>c.id===client.id?f:c)}));
     setSaved(true); setTimeout(()=>setSaved(false),2000);
-    // Sync to Supabase
     await sb.upsert("clients", {
       id: f.id, user_id: f.userId || f.id,
       name: f.name, email: f.email, phone: f.phone,
@@ -1587,9 +1645,58 @@ const AEditProfile = ({ client, db, setDb }) => {
       start_date: f.startDate, avatar: f.avatar,
     });
   };
+
+  const resetPassword = async () => {
+    const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+    const pwd = Array.from({length: 10}, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    setNewPassword(pwd);
+    setResetDone(true);
+    setCopied(false);
+    // Update in db and Supabase
+    const updated = { ...client, password: pwd, passwordChanged: false };
+    setDb(p => ({ ...p,
+      clients: p.clients.map(c => c.id === client.id ? updated : c),
+      users: p.users.map(u => u.clientId === client.id ? { ...u, password: pwd } : u),
+    }));
+    await sb.upsert("clients", { id: client.id, user_id: client.userId || client.id, name: client.name, email: client.email, password_changed: false });
+  };
+
+  const copyPassword = () => {
+    navigator.clipboard?.writeText(newPassword).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
   const fld = k => ({ value: f[k]||"", onChange: v => setF(p=>({...p,[k]:v})) });
+
   return (
     <div>
+      {/* Password section */}
+      <div style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "16px 18px", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>ACCESO DEL CLIENTE</div>
+        <div style={{ fontSize: 13, color: t.textSub, marginBottom: 4 }}>
+          Usuario: <span style={{ color: t.text, fontWeight: 700 }}>{client.email}</span>
+        </div>
+        <div style={{ fontSize: 13, color: t.textSub, marginBottom: 14 }}>
+          Contraseña: {client.passwordChanged
+            ? <span style={{ color: t.textDim }}>🔒 Personalizada por el cliente</span>
+            : <span style={{ color: t.text, fontWeight: 700, fontFamily: "monospace" }}>{client.password || "—"}</span>
+          }
+        </div>
+        {resetDone && newPassword && (
+          <div style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 10, padding: "12px 14px", marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, marginBottom: 6 }}>✅ NUEVA CONTRASEÑA GENERADA</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 18, fontWeight: 900, color: t.text, fontFamily: "monospace", letterSpacing: "0.1em", flex: 1 }}>{newPassword}</span>
+              <button onClick={copyPassword}
+                style={{ background: copied?t.accent:t.bgElevated, border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", color: copied?"white":t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                {copied ? "✓ Copiada" : "📋 Copiar"}
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: t.textSub, marginTop: 6 }}>Envía esta contraseña al cliente para que pueda acceder.</div>
+          </div>
+        )}
+        <Btn onClick={resetPassword} variant="ghost" size="sm">🔄 Resetear contraseña</Btn>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
         <Field label="NOMBRE" {...fld("name")}/>
         <Field label="EMAIL"  {...fld("email")} type="email"/>
@@ -2144,19 +2251,32 @@ const ANewClient = ({ db, setDb, onDone }) => {
 
 const ClientOnboarding = ({ client, db, setDb, onDone }) => {
   const [f, setF] = useState({ phone: client.phone||"", age: client.age||"", height: client.height||"", goal: client.goal||"", personalNotes: client.personalNotes||"", injuries: client.injuries||"Sin lesiones actuales." });
+  const [newPass, setNewPass] = useState("");
+  const [newPass2, setNewPass2] = useState("");
   const [saving, setSaving] = useState(false);
+  const [passErr, setPassErr] = useState("");
   const fld = k => ({ value: f[k], onChange: v => setF(p=>({...p,[k]:v})) });
 
   const save = async () => {
     if (!f.goal) return alert("Por favor indica tu objetivo");
+    if (newPass && newPass !== newPass2) { setPassErr("Las contraseñas no coinciden"); return; }
+    if (newPass && newPass.length < 6) { setPassErr("Mínimo 6 caracteres"); return; }
+    setPassErr("");
     setSaving(true);
-    const updated = { ...client, ...f, age: +f.age||0, height: +f.height||0 };
-    setDb(p => ({ ...p, clients: p.clients.map(c => c.id === client.id ? updated : c) }));
+    const passwordChanged = !!newPass;
+    const finalPassword = newPass || client.password;
+    const updated = { ...client, ...f, age: +f.age||0, height: +f.height||0, password: finalPassword, passwordChanged };
+    setDb(p => ({
+      ...p,
+      clients: p.clients.map(c => c.id === client.id ? updated : c),
+      users: p.users.map(u => u.clientId === client.id ? { ...u, password: finalPassword } : u),
+    }));
     await sb.upsert("clients", {
       id: client.id, user_id: client.userId, name: client.name, email: client.email,
       phone: f.phone || null, age: +f.age || null, height_cm: +f.height || null,
       goal: f.goal, personal_notes: f.personalNotes || null, injuries: f.injuries || null,
       status: "active", start_date: client.startDate, avatar: client.avatar,
+      password_changed: passwordChanged,
     });
     setSaving(false);
     onDone();
@@ -2184,10 +2304,19 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
           <Field label="¿CUÁL ES TU OBJETIVO? *" {...fld("goal")} placeholder="ej: Perder grasa, ganar músculo..."/>
           <Field label="NOTAS PERSONALES" {...fld("personalNotes")} multiline rows={2} placeholder="Horarios, preferencias, alergias..."/>
           <Field label="LESIONES O LIMITACIONES" {...fld("injuries")} multiline rows={2} placeholder="Sin lesiones actuales."/>
-          <Btn onClick={save} disabled={saving} full>
-            {saving ? "Guardando..." : "Completar perfil →"}
-          </Btn>
         </Card>
+
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 4 }}>ELIGE TU CONTRASEÑA</div>
+          <div style={{ fontSize: 12, color: t.textSub, marginBottom: 14 }}>Opcional — si no eliges una se mantendrá la contraseña inicial.</div>
+          <Field label="NUEVA CONTRASEÑA" value={newPass} onChange={setNewPass} type="password" placeholder="Mínimo 6 caracteres"/>
+          <Field label="REPETIR CONTRASEÑA" value={newPass2} onChange={setNewPass2} type="password" placeholder="Repite la contraseña"/>
+          {passErr && <div style={{ color: t.danger, fontSize: 13, marginBottom: 8 }}>{passErr}</div>}
+        </Card>
+
+        <Btn onClick={save} disabled={saving} full>
+          {saving ? "Guardando..." : "Completar perfil →"}
+        </Btn>
       </div>
     </div>
   );
