@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "2.9";
+const APP_VERSION = "3.0";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -204,6 +204,10 @@ const GlobalStyles = () => (
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.5; }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
     .fade-up { animation: fadeUp 0.3s ease forwards; }
   `}</style>
@@ -2498,6 +2502,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [uploadProgress, setUploadProgress] = useState(""); // "" | "compressing" | "uploading" | "saving"
   const [photos, setPhotos] = useState({
     front: existing?.photoFront || null,
     side: existing?.photoSide || null,
@@ -2551,15 +2556,21 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
   const handleSave = async () => {
     setSaving(true);
     setSaveError("");
+    setUploadProgress("");
 
     const checkin = { ...form, weekNum, savedAt: new Date().toISOString() };
     try {
-      // Upload photos to Supabase Storage
+      // Compress and upload photos
+      const hasPhotos = photoFiles.front || photoFiles.side || photoFiles.back;
+      if (hasPhotos) setUploadProgress("compressing");
+
       const [photoFrontUrl, photoSideUrl, photoBackUrl] = await Promise.all([
         photoFiles.front ? uploadPhoto(photoFiles.front, client.id, weekNum, "frente") : Promise.resolve(existing?.photoFront || null),
         photoFiles.side  ? uploadPhoto(photoFiles.side,  client.id, weekNum, "perfil") : Promise.resolve(existing?.photoSide  || null),
         photoFiles.back  ? uploadPhoto(photoFiles.back,  client.id, weekNum, "espalda") : Promise.resolve(existing?.photoBack || null),
       ]);
+
+      if (hasPhotos) setUploadProgress("saving");
 
       const sbData = {
         client_id: client.id,
@@ -2636,6 +2647,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
       setSaveError(`Error al guardar: ${err?.message || "inténtalo de nuevo"}`);
     }
     setSaving(false);
+    setUploadProgress("");
   };
 
   return (
@@ -2726,8 +2738,21 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
         </div>
       )}
 
+      {saving && uploadProgress && (
+        <div style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.25)`, borderRadius: 10, padding: "11px 14px", marginBottom: 14, color: t.accent, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span>
+          {uploadProgress === "compressing" && "Comprimiendo fotos..."}
+          {uploadProgress === "uploading" && "Subiendo fotos..."}
+          {uploadProgress === "saving" && "Guardando datos..."}
+        </div>
+      )}
+
       <Btn onClick={handleSave} disabled={saving} full size="lg">
-        {saving ? "Guardando..." : <><Icon n="check" s={18}/> Guardar check-in</>}
+        {saving
+          ? uploadProgress === "compressing" ? "Comprimiendo..." 
+          : uploadProgress === "saving" ? "Guardando..."
+          : "Subiendo fotos..."
+          : <><Icon n="check" s={18}/> Guardar check-in</>}
       </Btn>
     </div>
   );
