@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.1";
+const APP_VERSION = "3.2";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2845,31 +2845,10 @@ const CTracking = ({ client, db, setDb }) => {
     const load = async () => {
       const loaded = {};
       try {
-        // Load from Supabase
         const rows = await sb.select("checkins", `?client_id=eq.${client.id}&order=week_number`);
         rows.forEach(r => {
-          loaded[r.week_number] = {
-            weight: r.weight_kg, photo: null,
-            dietCompliance: r.diet_compliance, trainingCompliance: r.training_compliance,
-            cardioCompliance: r.cardio_compliance, hunger: r.hunger, energy: r.energy,
-            sleep: r.sleep_quality, trainingFeel: r.training_feel, discomfort: r.discomfort,
-            externalFactors: r.external_factors || [], comment: r.comment,
-            weekNum: r.week_number, savedAt: r.saved_at,
-          };
+          loaded[r.week_number] = mapCheckinRow(r);
         });
-        // Also try window.storage for photos
-        if (window?.storage?.get) {
-          const from = Math.max(1, currentWeek - 7);
-          for (let w = from; w <= currentWeek; w++) {
-            try {
-              const res = await window.storage.get(ciKey(client.id, w));
-              if (res) {
-                const local = JSON.parse(res.value);
-                if (local.photo && loaded[w]) loaded[w].photo = local.photo;
-              }
-            } catch {}
-          }
-        }
       } catch {}
       if (!cancelled) { setCheckins(loaded); setLoading(false); }
     };
