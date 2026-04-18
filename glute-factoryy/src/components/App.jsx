@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.3";
+const APP_VERSION = "3.4";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2459,6 +2459,39 @@ const getWeekDateRange = (startDate, weekNum) => {
 
 const ciKey = (clientId, weekNum) => `checkin:${clientId}:${weekNum}`;
 
+// ─── Calendar week utilities ──────────────────────────────────────────────────
+// Get Monday of the week containing a given date
+const getMonday = (date = new Date()) => {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day; // Monday = 1
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+// Format date as "D Mes"
+const fmtDay = d => {
+  const months = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  return `${d.getDate()} ${months[d.getMonth()]}`;
+};
+
+// Get week key as "YYYY-WW" for unique identification
+const getCalWeekKey = (date = new Date()) => {
+  const mon = getMonday(date);
+  const year = mon.getFullYear();
+  const startOfYear = new Date(year, 0, 1);
+  const weekNum = Math.ceil(((mon - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+  return `${year}-${String(weekNum).padStart(2, "0")}`;
+};
+
+// Get display range "Lun D Mes - Dom D Mes"
+const getCalWeekRange = (date = new Date()) => {
+  const mon = getMonday(date);
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  return `Lun ${fmtDay(mon)} – Dom ${fmtDay(sun)}`;
+};
+
 // ─── SliderField ──────────────────────────────────────────────────────────────
 const SliderField = ({ label, value, onChange, min = 0, max = 100, step = 1, leftLabel, rightLabel, unit = "%" }) => (
   <div style={{ marginBottom: 22 }}>
@@ -2850,9 +2883,12 @@ const CheckInSummary = ({ checkin, weekNum }) => {
 
 // ─── CTracking — client tracking tab ─────────────────────────────────────────
 const CTracking = ({ client, db, setDb }) => {
-  const currentWeek = getWeekNumber(client.startDate);
+  const thisWeekKey = getCalWeekKey(new Date());
+  const lastWeekKey = getCalWeekKey(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+
   const [checkins, setCheckins] = useState({});
-  const [openWeek, setOpenWeek] = useState(currentWeek);
+  const [selectedWeek, setSelectedWeek] = useState(null); // null = not chosen yet
+  const [openWeek, setOpenWeek] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editingWeek, setEditingWeek] = useState(null);
   const [showAll, setShowAll] = useState(false);
@@ -2871,19 +2907,20 @@ const CTracking = ({ client, db, setDb }) => {
     };
     load();
     return () => { cancelled = true; };
-  }, [client.id, currentWeek]);
+  }, [client.id]);
 
-  const handleSaved = (weekNum, checkin) => {
-    setCheckins(p => ({ ...p, [weekNum]: checkin }));
-    // Also update global db.checkins so admin sees it immediately
+  const handleSaved = (weekKey, checkin) => {
+    setCheckins(p => ({ ...p, [weekKey]: checkin }));
     setDb(p => ({
       ...p,
       checkins: {
         ...p.checkins,
-        [client.id]: { ...(p.checkins?.[client.id] || {}), [weekNum]: checkin }
+        [client.id]: { ...(p.checkins?.[client.id] || {}), [weekKey]: checkin }
       }
     }));
-    setOpenWeek(null);
+    setSelectedWeek(null);
+    setEditingWeek(null);
+    setOpenWeek(weekKey);
   };
 
   if (loading) return (
@@ -2892,73 +2929,131 @@ const CTracking = ({ client, db, setDb }) => {
     </div>
   );
 
-  // Show last 8 weeks; if showAll, show all from week 1
-  const from = showAll ? 1 : Math.max(1, currentWeek - 7);
-  const weekNums = Array.from({ length: currentWeek - from + 1 }, (_, i) => currentWeek - i);
+  const thisWeekDone = !!checkins[thisWeekKey];
+  const lastWeekDone = !!checkins[lastWeekKey];
+
+  // All weeks with checkins + current/last
+  const allKeys = [...new Set([
+    ...Object.keys(checkins),
+    thisWeekKey,
+    lastWeekKey,
+  ])].sort((a, b) => b.localeCompare(a));
+
+  const visibleKeys = showAll ? allKeys : allKeys.slice(0, 6);
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-        <div style={{ fontSize: 13, color: t.textSub, fontWeight: 600 }}>
-          Semana activa: <span style={{ color: t.accent, fontWeight: 800 }}>Semana {currentWeek}</span>
-        </div>
-        {currentWeek > 8 && (
-          <button onClick={() => setShowAll(s => !s)}
-            style={{ background: "none", border: "none", cursor: "pointer", color: t.accent, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
-            {showAll ? "Ver menos" : `Ver todas (${currentWeek})`}
-          </button>
-        )}
+      {/* Week selector — show when no week selected and current week not done */}
+      {!selectedWeek && !thisWeekDone && (
+        <Card accent style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 4 }}>¿De qué semana es este check-in?</div>
+          <div style={{ fontSize: 12, color: t.textSub, marginBottom: 14 }}>Elige la semana que quieres registrar.</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button onClick={() => { setSelectedWeek(thisWeekKey); setOpenWeek(thisWeekKey); }}
+              style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 20 }}>📅</span>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: t.accent }}>Esta semana</div>
+                <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{getCalWeekRange(new Date())}</div>
+              </div>
+            </button>
+            {!lastWeekDone && (
+              <button onClick={() => { setSelectedWeek(lastWeekKey); setOpenWeek(lastWeekKey); }}
+                style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 20 }}>📆</span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Semana pasada</div>
+                  <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{getCalWeekRange(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))}</div>
+                </div>
+              </button>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* Current/selected week form */}
+      {selectedWeek && !checkins[selectedWeek] && (
+        <Card accent style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+            <button onClick={() => setSelectedWeek(null)}
+              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: t.textSub, fontFamily: "inherit", fontSize: 12, fontWeight: 700 }}>
+              ← Cambiar
+            </button>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Check-in</div>
+              <div style={{ fontSize: 11, color: t.textSub }}>{getCalWeekRange(new Date())}</div>
+            </div>
+          </div>
+          <CheckInForm client={client} weekNum={selectedWeek} db={db} setDb={setDb} onSaved={c => handleSaved(selectedWeek, c)}/>
+        </Card>
+      )}
+
+      {/* List of all weeks */}
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10, marginTop: 4 }}>
+        HISTORIAL DE CHECK-INS
       </div>
 
-      {weekNums.map(weekNum => {
-        const isActive = weekNum === currentWeek;
-        const isOpen = openWeek === weekNum;
-        const done = !!checkins[weekNum];
-        const range = getWeekDateRange(client.startDate, weekNum);
+      {visibleKeys.map(weekKey => {
+        const isOpen = openWeek === weekKey;
+        const done = !!checkins[weekKey];
+        const isThisWeek = weekKey === thisWeekKey;
+        const weekDate = (() => {
+          try {
+            const [year, week] = weekKey.split("-").map(Number);
+            const jan1 = new Date(year, 0, 1);
+            const d = new Date(jan1.getTime() + (week - 1) * 7 * 24 * 60 * 60 * 1000);
+            return getMonday(d);
+          } catch { return new Date(); }
+        })();
+        const range = getCalWeekRange(weekDate);
 
         return (
-          <div key={weekNum} style={{ borderRadius: 16, border: `1.5px solid ${isOpen ? "rgba(30,155,191,0.35)" : done ? "rgba(30,155,191,0.18)" : t.border}`, background: t.bgCard, marginBottom: 10, overflow: "hidden", transition: "border-color 0.2s" }}>
-            <button onClick={() => setOpenWeek(isOpen ? null : weekNum)}
+          <div key={weekKey} style={{ borderRadius: 16, border: `1.5px solid ${isOpen ? "rgba(30,155,191,0.35)" : done ? "rgba(30,155,191,0.18)" : t.border}`, background: t.bgCard, marginBottom: 10, overflow: "hidden" }}>
+            <button onClick={() => setOpenWeek(isOpen ? null : weekKey)}
               style={{ width: "100%", background: "none", border: "none", cursor: "pointer", padding: "16px 18px", display: "flex", alignItems: "center", gap: 14, fontFamily: "inherit", textAlign: "left" }}>
               <div style={{ width: 42, height: 42, borderRadius: 12, background: done ? "rgba(30,155,191,0.15)" : t.bgElevated, border: `1.5px solid ${done ? "rgba(30,155,191,0.35)" : t.border}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 18 }}>
-                {done ? "✅" : isActive ? "📝" : "🔒"}
+                {done ? "✅" : isThisWeek ? "📝" : "⬜"}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Semana {weekNum}</span>
-                  {isActive && !done && <Pill color="accent">Activa</Pill>}
+                  <span style={{ fontSize: 15, fontWeight: 800, color: t.text }}>{range}</span>
+                  {isThisWeek && !done && <Pill color="accent">Esta semana</Pill>}
                   {done && <Pill color="accent">✓ Completada</Pill>}
                 </div>
-                <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{range}</div>
               </div>
-              <div style={{ color: isOpen ? t.accent : t.textDim, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s, color 0.15s", flexShrink: 0 }}>
-                <Icon n="down" s={16}/>
-              </div>
+              <Icon n="down" s={16} style={{ color: isOpen ? t.accent : t.textDim, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s", flexShrink: 0 }}/>
             </button>
 
             {isOpen && (
               <div style={{ padding: "0 18px 18px", animation: "fadeUp 0.2s ease" }}>
                 <div style={{ height: 1, background: t.border, marginBottom: 16 }}/>
-                {done && editingWeek !== weekNum
+                {done && editingWeek !== weekKey
                   ? <>
-                      <CheckInSummary checkin={checkins[weekNum]} weekNum={weekNum}/>
+                      <CheckInSummary checkin={checkins[weekKey]} weekNum={weekKey}/>
                       <div style={{ marginTop: 14 }}>
-                        <Btn variant="ghost" size="sm" onClick={() => setEditingWeek(weekNum)}>
+                        <Btn variant="ghost" size="sm" onClick={() => setEditingWeek(weekKey)}>
                           ✏️ Editar check-in
                         </Btn>
                       </div>
                     </>
-                  : (isActive || editingWeek === weekNum)
-                    ? <CheckInForm client={client} weekNum={weekNum} db={db} setDb={setDb}
-                        existing={checkins[weekNum]}
-                        onSaved={c => { handleSaved(weekNum, c); setEditingWeek(null); }}/>
-                    : <div style={{ textAlign: "center", padding: "20px 0", color: t.textSub, fontSize: 13 }}>Esta semana no tiene check-in registrado.</div>
+                  : (isThisWeek || editingWeek === weekKey || selectedWeek === weekKey)
+                    ? <CheckInForm client={client} weekNum={weekKey} db={db} setDb={setDb}
+                        existing={checkins[weekKey]}
+                        onSaved={c => handleSaved(weekKey, c)}/>
+                    : <div style={{ textAlign: "center", padding: "20px 0", color: t.textSub, fontSize: 13 }}>No hay check-in para esta semana.</div>
                 }
               </div>
             )}
           </div>
         );
       })}
+
+      {allKeys.length > 6 && (
+        <button onClick={() => setShowAll(s => !s)}
+          style={{ background: "none", border: "none", cursor: "pointer", color: t.accent, fontSize: 13, fontWeight: 700, fontFamily: "inherit", width: "100%", textAlign: "center", padding: "8px 0" }}>
+          {showAll ? "Ver menos" : `Ver todas (${allKeys.length})`}
+        </button>
+      )}
     </div>
   );
 };
@@ -2966,9 +3061,8 @@ const CTracking = ({ client, db, setDb }) => {
 // ─── ATrackingTab — admin view of check-ins ───────────────────────────────────
 const ATrackingTab = ({ client }) => {
   const { db, loadFromSupabase, syncing } = useApp();
-  const currentWeek = getWeekNumber(client.startDate);
   const clientCheckins = (db.checkins || {})[client.id] || {};
-  const completed = Object.entries(clientCheckins).sort((a, b) => +b[0] - +a[0]);
+  const completed = Object.entries(clientCheckins).sort((a, b) => b[0].localeCompare(a[0]));
   const cc = v => v >= 80 ? t.accent : v >= 50 ? t.warn : t.danger;
 
   return (
@@ -2976,7 +3070,7 @@ const ATrackingTab = ({ client }) => {
       {/* Header + refresh */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 13, color: t.textSub, fontWeight: 600 }}>
-          {completed.length} check-in{completed.length !== 1 ? "s" : ""} completado{completed.length !== 1 ? "s" : ""} · Semana actual: {currentWeek}
+          {completed.length} check-in{completed.length !== 1 ? "s" : ""} completado{completed.length !== 1 ? "s" : ""}
         </div>
         <button onClick={loadFromSupabase} disabled={syncing}
           style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 12px", color: syncing ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, cursor: syncing ? "default" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
@@ -2990,8 +3084,8 @@ const ATrackingTab = ({ client }) => {
         <Card key={weekNum} style={{ marginBottom: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>Semana {weekNum}</div>
-              <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{getWeekDateRange(client.startDate, +weekNum)}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: t.text }}>{weekNum.includes("-") ? getCalWeekRange((() => { try { const [y,w] = weekNum.split("-").map(Number); const jan1 = new Date(y,0,1); return getMonday(new Date(jan1.getTime()+(w-1)*7*24*60*60*1000)); } catch { return new Date(); } })()) : `Semana ${weekNum}`}</div>
+              <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{weekNum}</div>
             </div>
             {ci.weight && (
               <div style={{ textAlign: "right" }}>
