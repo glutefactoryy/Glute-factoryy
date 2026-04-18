@@ -1,5 +1,7 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
+const APP_VERSION = "2.7";
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -151,20 +153,22 @@ const mergeSupabaseIntoDb = (prev, { clients, weights, notes, clientData, checki
 
 // ─── TOKENS ───────────────────────────────────────────────────────────────────
 const t = {
-  bg:          "#07090f",
-  bgCard:      "#0d1420",
-  bgElevated:  "#111d2e",
-  bgInput:     "#0d1826",
-  border:      "#172235",
-  borderMid:   "#1e2f45",
+  bg:          "#05070e",
+  bgCard:      "#0a1120",
+  bgElevated:  "#0f1928",
+  bgInput:     "#0b1422",
+  border:      "#14203a",
+  borderMid:   "#1a2d4a",
+  borderAccent:"rgba(30,155,191,0.3)",
   accent:      "#1E9BBF",
   accentLight: "#29bae0",
   accentDim:   "#14708a",
-  accentAlpha: "rgba(30,155,191,0.13)",
-  accentGlow:  "rgba(30,155,191,0.22)",
-  text:        "#edf2f7",
+  accentAlpha: "rgba(30,155,191,0.12)",
+  accentGlow:  "rgba(30,155,191,0.28)",
+  accentGlow2: "rgba(30,155,191,0.08)",
+  text:        "#f0f6ff",
   textSub:     "#6b8ea8",
-  textDim:     "#334d63",
+  textDim:     "#2e4560",
   danger:      "#e05a5a",
   dangerAlpha: "rgba(224,90,90,0.12)",
   warn:        "#f0a030",
@@ -589,8 +593,9 @@ const Pill = ({ children, color = "default" }) => {
 const Av = ({ initials, size = 44 }) => (
   <div style={{
     width: size, height: size, borderRadius: size * 0.3, flexShrink: 0,
-    background: `linear-gradient(135deg, rgba(30,155,191,0.25), rgba(30,155,191,0.08))`,
-    border: `1.5px solid rgba(30,155,191,0.3)`,
+    background: `linear-gradient(135deg, rgba(30,155,191,0.3) 0%, rgba(20,112,138,0.15) 100%)`,
+    border: `1.5px solid rgba(30,155,191,0.4)`,
+    boxShadow: `0 4px 14px rgba(30,155,191,0.18)`,
     display: "flex", alignItems: "center", justifyContent: "center",
     color: t.accent, fontSize: size * 0.32, fontWeight: 800, letterSpacing: "0.03em",
   }}>{initials}</div>
@@ -647,10 +652,18 @@ const Btn = ({ children, onClick, variant = "primary", size = "md", disabled, fu
 // ─── CARD ─────────────────────────────────────────────────────────────────────
 const Card = ({ children, onClick, style: sx = {}, accent }) => (
   <div onClick={onClick} style={{
-    background: t.bgCard, borderRadius: 16, padding: 18,
-    border: `1.5px solid ${accent ? "rgba(30,155,191,0.2)" : t.border}`,
-    boxShadow: accent ? `0 2px 20px rgba(30,155,191,0.07)` : "none",
-    cursor: onClick ? "pointer" : "default", transition: "transform 0.12s, border-color 0.15s", ...sx,
+    background: accent
+      ? `linear-gradient(135deg, rgba(30,155,191,0.1) 0%, ${t.bgCard} 60%)`
+      : `linear-gradient(135deg, ${t.bgCard} 0%, #080f1c 100%)`,
+    borderRadius: 18,
+    padding: 18,
+    border: `1.5px solid ${accent ? "rgba(30,155,191,0.3)" : t.border}`,
+    boxShadow: accent
+      ? `0 4px 24px rgba(30,155,191,0.12), 0 1px 0 rgba(30,155,191,0.15) inset`
+      : `0 4px 20px rgba(0,0,0,0.3), 0 1px 0 rgba(255,255,255,0.02) inset`,
+    cursor: onClick ? "pointer" : "default",
+    transition: "transform 0.12s, border-color 0.15s, box-shadow 0.15s",
+    ...sx,
   }}
     onMouseDown={e => { if (onClick) e.currentTarget.style.transform = "scale(0.99)"; }}
     onMouseUp={e => { if (onClick) e.currentTarget.style.transform = "scale(1)"; }}
@@ -776,6 +789,9 @@ const Login = () => {
         </Card>
 
         {/* Demo block removed — credentials managed by admin only */}
+        <div style={{ textAlign: "center", marginTop: 20 }}>
+          <span style={{ fontSize: 11, color: t.textDim, fontWeight: 500 }}>v{APP_VERSION}</span>
+        </div>
       </div>
     </div>
   );
@@ -2462,16 +2478,24 @@ const BtnGroup = ({ label, options, value, onChange, multi = false }) => (
 );
 
 // ─── CheckInForm ──────────────────────────────────────────────────────────────
-const CheckInForm = ({ client, weekNum, db, setDb, onSaved }) => {
+const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
   const [form, setForm] = useState({
-    weight: "", photo: null,
-    dietCompliance: 70, trainingCompliance: 70, cardioCompliance: 70,
-    hunger: "", energy: 5, sleep: "", trainingFeel: "", discomfort: "",
-    externalFactors: [], comment: "",
+    weight: existing?.weight || "",
+    photo: existing?.photo || null,
+    dietCompliance: existing?.dietCompliance ?? 70,
+    trainingCompliance: existing?.trainingCompliance ?? 70,
+    cardioCompliance: existing?.cardioCompliance ?? 70,
+    hunger: existing?.hunger || "",
+    energy: existing?.energy ?? 5,
+    sleep: existing?.sleep || "",
+    trainingFeel: existing?.trainingFeel || "",
+    discomfort: existing?.discomfort || "",
+    externalFactors: existing?.externalFactors || [],
+    comment: existing?.comment || "",
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [preview, setPreview] = useState(null);
+  const [preview, setPreview] = useState(existing?.photo || null);
   const [photoFile, setPhotoFile] = useState(null);
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -2857,9 +2881,18 @@ const CTracking = ({ client, db, setDb }) => {
               <div style={{ padding: "0 18px 18px", animation: "fadeUp 0.2s ease" }}>
                 <div style={{ height: 1, background: t.border, marginBottom: 16 }}/>
                 {done
-                  ? <CheckInSummary checkin={checkins[weekNum]} weekNum={weekNum}/>
+                  ? <>
+                      <CheckInSummary checkin={checkins[weekNum]} weekNum={weekNum}/>
+                      <div style={{ marginTop: 14 }}>
+                        <Btn variant="ghost" size="sm" onClick={() => {
+                          setCheckins(p => { const n = {...p}; delete n[weekNum]; return n; });
+                        }}>
+                          ✏️ Editar check-in
+                        </Btn>
+                      </div>
+                    </>
                   : isActive
-                    ? <CheckInForm client={client} weekNum={weekNum} db={db} setDb={setDb} onSaved={c => handleSaved(weekNum, c)}/>
+                    ? <CheckInForm client={client} weekNum={weekNum} db={db} setDb={setDb} onSaved={c => handleSaved(weekNum, c)} existing={checkins[weekNum]}/>
                     : <div style={{ textAlign: "center", padding: "20px 0", color: t.textSub, fontSize: 13 }}>Esta semana no tiene check-in registrado.</div>
                 }
               </div>
