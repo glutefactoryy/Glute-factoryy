@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.4";
+const APP_VERSION = "3.5";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2387,6 +2387,7 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
       phone: f.phone || null, age: +f.age || null, height_cm: +f.height || null,
       goal: f.goal, personal_notes: f.personalNotes || null, injuries: f.injuries || null,
       status: "active", start_date: client.startDate, avatar: client.avatar,
+      password: finalPassword,
       password_changed: passwordChanged,
     });
     setSaving(false);
