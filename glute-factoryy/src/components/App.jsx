@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.8";
+const APP_VERSION = "3.9";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -961,8 +961,8 @@ const CHome = ({ client, weights, notes, db, onGoToCheckin }) => {
   const lastNote = notes[0];
 
   // Check if check-in is pending this week
-  const currentWeek = getWeekNumber(client.startDate);
-  const hasCheckin = !!(db?.checkins?.[client.id]?.[currentWeek]);
+  const currentWeekKey = getCalWeekKey(new Date());
+  const hasCheckin = !!(db?.checkins?.[client.id]?.[currentWeekKey]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1642,9 +1642,11 @@ const AdminApp = () => {
 const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins }) => {
   const [filter, setFilter] = useState("all"); // all | done | pending
 
+  // Always check last week — checkins are done on Sundays
+  const relevantWeekKey = getCalWeekKey(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+
   const filtered = clients.filter(c => {
-    const currentWeek = getWeekNumber(c.startDate);
-    const hasCheckin = !!(db.checkins?.[c.id]?.[currentWeek]);
+    const hasCheckin = !!(db.checkins?.[c.id]?.[relevantWeekKey]);
     if (filter === "done") return hasCheckin;
     if (filter === "pending") return !hasCheckin;
     return true;
@@ -1701,13 +1703,13 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
     {filtered.length === 0 && <Empty icon="users" text={filter==="done" ? "Ningún cliente ha hecho check-in esta semana" : filter==="pending" ? "Todos los clientes han hecho check-in 🎉" : "Sin clientes"}/>}
     {filtered.map(c => {
       const lastW = (db.weightHistory[c.id]||[]).slice(-1)[0];
-      const currentWeek = getWeekNumber(c.startDate);
-      const hasCheckin = !!(db.checkins?.[c.id]?.[currentWeek]);
+      const hasCheckin = !!(db.checkins?.[c.id]?.[relevantWeekKey]);
       // Calculate streak
       const clientCheckins = db.checkins?.[c.id] || {};
+      const allDoneKeys = Object.keys(clientCheckins).sort();
       let streak = 0;
-      for (let w = currentWeek; w >= 1; w--) {
-        if (clientCheckins[w]) streak++;
+      for (let i = allDoneKeys.length - 1; i >= 0; i--) {
+        if (clientCheckins[allDoneKeys[i]]) streak++;
         else break;
       }
       return (
