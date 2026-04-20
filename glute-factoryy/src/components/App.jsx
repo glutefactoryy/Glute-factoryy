@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.9";
+const APP_VERSION = "3.9.2";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1640,17 +1640,29 @@ const AdminApp = () => {
 };
 
 const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins }) => {
-  const [filter, setFilter] = useState("all"); // all | done | pending
+  const [filter, setFilter] = useState("all"); // all | done | pending | active | inactive | az
 
   // Always check last week — checkins are done on Sundays
   const relevantWeekKey = getCalWeekKey(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
 
-  const filtered = clients.filter(c => {
-    const hasCheckin = !!(db.checkins?.[c.id]?.[relevantWeekKey]);
-    if (filter === "done") return hasCheckin;
-    if (filter === "pending") return !hasCheckin;
-    return true;
-  });
+  const filtered = clients
+    .filter(c => {
+      const hasCheckin = !!(db.checkins?.[c.id]?.[relevantWeekKey]);
+      if (filter === "done") return hasCheckin;
+      if (filter === "pending") return !hasCheckin;
+      if (filter === "active") return c.status === "active";
+      if (filter === "inactive") return c.status !== "active";
+      return true;
+    })
+    .sort((a, b) => {
+      if (filter === "az") return a.name.localeCompare(b.name);
+      if (filter === "done" || filter === "pending") {
+        const aHas = !!(db.checkins?.[a.id]?.[relevantWeekKey]);
+        const bHas = !!(db.checkins?.[b.id]?.[relevantWeekKey]);
+        return bHas - aHas;
+      }
+      return 0;
+    });
 
   return (
   <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1676,11 +1688,11 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       <Btn onClick={onNew} style={{ paddingLeft: 16, paddingRight: 16 }}><Icon n="plus" s={18}/></Btn>
     </div>
 
-    {/* Filter buttons */}
-    <div style={{ display: "flex", gap: 8 }}>
-      {[["all","Todos"],["done","✅ Con check-in"],["pending","⏳ Pendientes"]].map(([val, lbl]) => (
+    {/* Single filter row */}
+    <div style={{ overflowX: "auto", display: "flex", gap: 8, paddingBottom: 2, scrollbarWidth: "none" }}>
+      {[["all","Todos"],["done","✅ Check-in"],["pending","⏳ Pendientes"],["active","🟢 Activos"],["inactive","⚫ Inactivos"],["az","A-Z"]].map(([val, lbl]) => (
         <button key={val} onClick={() => setFilter(val)}
-          style={{ background: filter===val ? t.accentAlpha : t.bgCard, border: `1.5px solid ${filter===val ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "8px 14px", color: filter===val ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s" }}>
+          style={{ background: filter===val ? t.accentAlpha : t.bgCard, border: `1.5px solid ${filter===val ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "8px 14px", color: filter===val ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s", flexShrink: 0 }}>
           {lbl}
         </button>
       ))}
@@ -1849,7 +1861,25 @@ const AEditProfile = ({ client, db, setDb }) => {
 
   return (
     <div>
-      {/* Password section */}
+      {/* Active/Inactive toggle */}
+      <div style={{ background: t.bgCard, border: `1.5px solid ${client.status === "active" ? "rgba(30,155,191,0.2)" : "rgba(224,90,90,0.2)"}`, borderRadius: 14, padding: "14px 18px", marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>Estado del cliente</div>
+          <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>
+            {client.status === "active" ? "🟢 Activo — acceso completo a la app" : "⚫ Inactivo — sin acceso a la app"}
+          </div>
+        </div>
+        <button onClick={async () => {
+          const newStatus = client.status === "active" ? "inactive" : "active";
+          const updated = { ...f, status: newStatus };
+          setF(updated);
+          setDb(p => ({ ...p, clients: p.clients.map(c => c.id === client.id ? {...c, status: newStatus} : c) }));
+          await sb.upsert("clients", { id: client.id, user_id: client.userId || client.id, name: client.name, email: client.email, status: newStatus });
+        }}
+          style={{ background: client.status === "active" ? t.dangerAlpha : t.accentAlpha, border: `1.5px solid ${client.status === "active" ? "rgba(224,90,90,0.3)" : "rgba(30,155,191,0.3)"}`, borderRadius: 10, padding: "8px 14px", cursor: "pointer", color: client.status === "active" ? t.danger : t.accent, fontSize: 12, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+          {client.status === "active" ? "Desactivar" : "Activar"}
+        </button>
+      </div>
       <div style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "16px 18px", marginBottom: 16 }}>
         <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>ACCESO DEL CLIENTE</div>
         <div style={{ fontSize: 13, color: t.textSub, marginBottom: 4 }}>
