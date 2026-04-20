@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "4.2";
+const APP_VERSION = "4.4";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -66,7 +66,27 @@ const sb = {
   },
 };
 
-// Helper: merge Supabase data into local db state
+// ─── Notification helper ──────────────────────────────────────────────────────
+const sendNotification = async (adminId, type, title, body, linkType = null, linkId = null) => {
+  try {
+    await sb.insert("admin_notifications", {
+      admin_id: adminId, type, title, body,
+      link_type: linkType, link_id: linkId, read: false,
+    });
+  } catch {}
+};
+
+const notifyAllAdmins = async (exceptId, type, title, body, linkType = null, linkId = null) => {
+  try {
+    const admins = await sb.select("admins", "?select=id");
+    if (!admins) return;
+    await Promise.all(
+      admins.filter(a => a.id !== exceptId).map(a =>
+        sendNotification(a.id, type, title, body, linkType, linkId)
+      )
+    );
+  } catch {}
+};
 const mapCheckinRow = r => {
   // Parse external factors from comment if stored there
   let comment = r.comment || "";
@@ -522,7 +542,11 @@ const Login = () => {
   const go = async () => {
     setLoading(true); setErr("");
     const ok = await login(user, pass);
-    if (!ok) setErr("Usuario o contraseña incorrectos");
+    if (ok === "blocked") {
+      setErr("🔒 Demasiados intentos fallidos. Espera 15 minutos antes de volver a intentarlo.");
+    } else if (!ok) {
+      setErr("Usuario o contraseña incorrectos");
+    }
     setLoading(false);
   };
 
@@ -597,6 +621,21 @@ const ClientChat = ({ client, isAdmin }) => {
   useEffect(() => { load(); }, [clientId]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
+  // Mark as read when admin opens chat
+  useEffect(() => {
+    if (isAdmin && currentUser) {
+      const markRead = async () => {
+        try {
+          const admins = await sb.select("admins", `?id=eq.${currentUser.id}`);
+          const lastRead = admins?.[0]?.last_read || {};
+          lastRead[clientId] = new Date().toISOString();
+          await sb.upsert("admins", { id: currentUser.id, name: currentUser.name, email: currentUser.email, password: currentUser.password, role: currentUser.role, last_read: lastRead });
+        } catch {}
+      };
+      markRead();
+    }
+  }, [clientId, isAdmin]);
+
   const send = async () => {
     if (!text.trim()) return;
     setSending(true);
@@ -607,6 +646,14 @@ const ClientChat = ({ client, isAdmin }) => {
       sender_role: currentUser.role,
       message: text.trim(),
     });
+    // If client sends message, notify all admins
+    if (!isAdmin) {
+      await notifyAllAdmins(null, "chat",
+        `💬 Mensaje de ${currentUser.name}`,
+        text.trim().substring(0, 80),
+        "client", clientId
+      );
+    }
     setText("");
     await load();
     setSending(false);
@@ -1372,6 +1419,71 @@ const AdminManagement = ({ onBack }) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ─── AdminNotifications ───────────────────────────────────────────────────────
+const AdminNotifications = ({ onBack, onSel }) => {
+  const { currentUser } = useApp();
+  const [notifs, setNotifs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      const rows = await sb.select("admin_notifications",
+        `?admin_id=eq.${currentUser.id}&order=created_at.desc&limit=50`);
+      if (rows) setNotifs(rows);
+      // Mark all as read
+      try {
+        await fetchWithTimeout(`${SB_URL}/rest/v1/admin_notifications?admin_id=eq.${currentUser.id}&read=eq.false`, {
+          method: "PATCH",
+          headers: { ...SB_H, "Prefer": "return=minimal" },
+          body: JSON.stringify({ read: true }),
+        });
+      } catch {}
+      setLoading(false);
+    };
+    load();
+  }, [currentUser.id]);
+
+  const fmtTime = ts => {
+    try {
+      const d = new Date(ts);
+      const now = new Date();
+      const diff = now - d;
+      if (diff < 60000) return "Ahora mismo";
+      if (diff < 3600000) return `Hace ${Math.floor(diff/60000)} min`;
+      if (diff < 86400000) return `Hace ${Math.floor(diff/3600000)}h`;
+      return `${d.getDate()}/${d.getMonth()+1}`;
+    } catch { return ""; }
+  };
+
+  const iconFor = type => {
+    if (type === "chat") return "💬";
+    if (type === "changelog") return "📋";
+    if (type === "admin_chat") return "👥";
+    return "🔔";
+  };
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+      {loading && <div style={{ textAlign:"center", color:t.textSub, padding:40, animation:"pulse 1.5s infinite" }}>Cargando...</div>}
+      {!loading && notifs.length === 0 && <Empty icon="alert" text="Sin notificaciones nuevas"/>}
+      {notifs.map(n => (
+        <div key={n.id} onClick={() => n.link_type === "client" && onSel(n.link_id)}
+          style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 10, display: "flex", gap: 12, alignItems: "flex-start", cursor: n.link_type === "client" ? "pointer" : "default" }}>
+          <div style={{ fontSize: 24, flexShrink: 0 }}>{iconFor(n.type)}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: t.text, marginBottom: 2 }}>{n.title}</div>
+            <div style={{ fontSize: 13, color: t.textSub, lineHeight: 1.5 }}>{n.body}</div>
+            <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{fmtTime(n.created_at)}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // ─── AdminChat ────────────────────────────────────────────────────────────────
 const AdminChat = () => {
   const { currentUser } = useApp();
@@ -1395,6 +1507,8 @@ const AdminChat = () => {
     setSending(true);
     const msg = { admin_id: currentUser.id, admin_name: currentUser.name, message: text.trim() };
     await sb.insert("admin_messages", msg);
+    // Notify other admins
+    await notifyAllAdmins(currentUser.id, "admin_chat", `${currentUser.name} en el chat`, text.trim().substring(0, 80));
     setText("");
     await load();
     setSending(false);
@@ -1473,6 +1587,11 @@ const AdminChangelog = ({ onBack }) => {
     const months = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
     const date = `${months[now.getMonth()]} ${now.getFullYear()}`;
     await sb.insert("changelog", { version: newVersion, date, changes: newChanges.trim() });
+    // Notify all admins
+    await notifyAllAdmins(currentUser.id, "changelog",
+      `📋 Nueva actualización v${newVersion}`,
+      newChanges.trim().substring(0, 100)
+    );
     setNewChanges(""); setShowAdd(false);
     await load();
     setSaving(false);
@@ -1581,6 +1700,22 @@ const AdminApp = () => {
   const [selId, setSelId] = useState(null);
   const [q, setQ] = useState("");
   const [onboarded, setOnboarded] = useState(false);
+  const [unreadNotifs, setUnreadNotifs] = useState(0);
+
+  // Load unread notification count
+  useEffect(() => {
+    if (!currentUser) return;
+    const load = async () => {
+      try {
+        const notifs = await sb.select("admin_notifications",
+          `?admin_id=eq.${currentUser.id}&read=eq.false`);
+        setUnreadNotifs(notifs?.length || 0);
+      } catch {}
+    };
+    load();
+    const interval = setInterval(load, 30000); // check every 30s
+    return () => clearInterval(interval);
+  }, [currentUser?.id]);
 
   const isSuperAdmin = currentUser?.role === "superadmin";
 
@@ -1617,6 +1752,7 @@ const AdminApp = () => {
     if (view === "admins") return "Administradores";
     if (view === "chat") return "💬 Chat Admin";
     if (view === "changelog") return "📋 Actualizaciones";
+    if (view === "notifications") return "🔔 Notificaciones";
     return sel?.name;
   };
 
@@ -1639,6 +1775,15 @@ const AdminApp = () => {
             <button onClick={loadFromSupabase} disabled={syncing}
               style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 12, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: syncing ? "default" : "pointer", color: syncing ? t.accent : t.textSub, fontSize: 16 }}>
               ↻
+            </button>
+            <button onClick={() => { setView("notifications"); setUnreadNotifs(0); }}
+              style={{ background: view==="notifications"?t.accentAlpha:t.bgElevated, border: `1px solid ${view==="notifications"?"rgba(30,155,191,0.3)":t.border}`, borderRadius: 12, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: view==="notifications"?t.accent:t.textSub, fontSize: 18, position: "relative" }}>
+              🔔
+              {unreadNotifs > 0 && (
+                <div style={{ position: "absolute", top: -4, right: -4, background: "#e05a5a", borderRadius: 20, minWidth: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", fontSize: 10, fontWeight: 800, color: "white", border: `2px solid ${t.bg}` }}>
+                  {unreadNotifs > 9 ? "9+" : unreadNotifs}
+                </div>
+              )}
             </button>
             <button onClick={() => setView("chat")}
               style={{ background: view==="chat"?t.accentAlpha:t.bgElevated, border: `1px solid ${view==="chat"?"rgba(30,155,191,0.3)":t.border}`, borderRadius: 12, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: view==="chat"?t.accent:t.textSub, fontSize: 18 }}>
@@ -1663,16 +1808,45 @@ const AdminApp = () => {
         {view === "admins"    && isSuperAdmin && <AdminManagement onBack={() => setView("list")}/>}
         {view === "chat"      && <AdminChat/>}
         {view === "changelog" && <AdminChangelog onBack={() => setView("settings")}/>}
+        {view === "notifications" && <AdminNotifications onBack={() => setView("list")} onSel={(clientId) => { setSelId(clientId); setView("detail"); }}/>}
       </div>
     </div>
   );
 };
 
 const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins }) => {
-  const [filter, setFilter] = useState("all"); // all | done | pending | active | inactive | az
+  const { currentUser } = useApp();
+  const [filter, setFilter] = useState("all");
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   // Always check last week — checkins are done on Sundays
   const relevantWeekKey = getCalWeekKey(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+
+  // Load unread message counts
+  useEffect(() => {
+    const loadUnread = async () => {
+      try {
+        // Get admin's last_read timestamps
+        const admins = await sb.select("admins", `?id=eq.${currentUser.id}`);
+        const lastRead = admins?.[0]?.last_read || {};
+        // Get all client messages
+        const msgs = await sb.select("client_messages", "?order=created_at.desc");
+        if (!msgs) return;
+        // Count unread per client (messages not from admin, after last_read)
+        const counts = {};
+        msgs.forEach(m => {
+          if (m.sender_role === "client") {
+            const lr = lastRead[m.client_id] ? new Date(lastRead[m.client_id]) : new Date(0);
+            if (new Date(m.created_at) > lr) {
+              counts[m.client_id] = (counts[m.client_id] || 0) + 1;
+            }
+          }
+        });
+        setUnreadCounts(counts);
+      } catch {}
+    };
+    loadUnread();
+  }, [currentUser.id]);
 
   const filtered = clients
     .filter(c => {
@@ -1745,6 +1919,7 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
     {filtered.map(c => {
       const lastW = (db.weightHistory[c.id]||[]).slice(-1)[0];
       const hasCheckin = !!(db.checkins?.[c.id]?.[relevantWeekKey]);
+      const unread = unreadCounts[c.id] || 0;
       // Calculate streak
       const clientCheckins = db.checkins?.[c.id] || {};
       const allDoneKeys = Object.keys(clientCheckins).sort();
@@ -1765,9 +1940,16 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div style={{ fontSize: 16, fontWeight: 800, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{c.name}</div>
-                <Pill color={hasCheckin ? "accent" : "default"}>
-                  {hasCheckin ? "✅ Check-in" : "⏳ Pendiente"}
-                </Pill>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {unread > 0 && (
+                    <div style={{ background: "#e05a5a", borderRadius: 20, minWidth: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 6px", fontSize: 11, fontWeight: 800, color: "white" }}>
+                      {unread > 99 ? "99+" : unread}
+                    </div>
+                  )}
+                  <Pill color={hasCheckin ? "accent" : "default"}>
+                    {hasCheckin ? "✅ Check-in" : "⏳ Pendiente"}
+                  </Pill>
+                </div>
               </div>
               <div style={{ fontSize: 13, color: t.textSub, marginTop: 3 }}>{c.email}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
@@ -3390,9 +3572,20 @@ export default function App() {
   }, []);
 
   const login = useCallback(async (email, password) => {
+    // ── Brute force protection ──────────────────────────────────────────────
+    try {
+      const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const attempts = await sb.select("login_attempts",
+        `?email=eq.${encodeURIComponent(email)}&success=eq.false&created_at=gte.${since}`);
+      if (attempts?.length >= 5) {
+        return "blocked";
+      }
+    } catch {}
+
     // 1. Check local users (already loaded from Supabase)
     const localUser = db.users.find(u => u.email === email && u.password === password);
     if (localUser) {
+      await sb.insert("login_attempts", { email, success: true });
       setCurrentUser(localUser);
       await loadFromSupabase();
       return true;
@@ -3404,6 +3597,7 @@ export default function App() {
         const a = admins[0];
         const adminUser = { id: a.id, email: a.email, password: a.password, role: a.role, name: a.name, passwordChanged: a.password_changed || false };
         setDb(p => ({ ...p, users: p.users.find(u => u.id === a.id) ? p.users : [...p.users, adminUser] }));
+        await sb.insert("login_attempts", { email, success: true });
         setCurrentUser(adminUser);
         await loadFromSupabase();
         return true;
@@ -3419,11 +3613,14 @@ export default function App() {
           role: "client", name: c.name, clientId: c.id,
         };
         setDb(p => ({ ...p, users: p.users.find(u => u.id === clientUser.id) ? p.users : [...p.users, clientUser] }));
+        await sb.insert("login_attempts", { email, success: true });
         setCurrentUser(clientUser);
         await loadFromSupabase();
         return true;
       }
     } catch {}
+    // Failed login — record attempt
+    try { await sb.insert("login_attempts", { email, success: false }); } catch {}
     return false;
   }, [db, loadFromSupabase]);
 
