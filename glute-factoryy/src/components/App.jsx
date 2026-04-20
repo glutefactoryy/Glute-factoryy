@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "3.9.2";
+const APP_VERSION = "3.9.3";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -268,19 +268,13 @@ const ID = {
 const INITIAL_DB = {
   users: [
     { id: "admin-pol", email: "Pol", password: "12345", role: "superadmin", name: "Pol" },
-    { id: ID.u1,   email: "carlos",  password: "carlos123", role: "client", name: "Carlos Martínez", clientId: ID.c1 },
-    { id: ID.u2,   email: "laura",   password: "laura123",  role: "client", name: "Laura Sánchez",   clientId: ID.c2 },
-    { id: ID.u3,   email: "miguel",  password: "mig123",    role: "client", name: "Miguel Torres",   clientId: ID.c3 },
+    { id: ID.u1, email: "carlos", password: "carlos123", role: "client", name: "Carlos Martínez", clientId: ID.c1 },
   ],
   clients: [
-    { id:ID.c1, userId:ID.u1, name:"Carlos Martínez", email:"carlos@mail.com", phone:"+34 612 345 678", age:28, height:178, goal:"Hipertrofia muscular",          startDate:"2024-01-15", status:"active", avatar:"CM", personalNotes:"Trabaja en oficina, puede entrenar por las tardes.", injuries:"Leve molestia en hombro derecho. Evitar press militar pesado." },
-    { id:ID.c2, userId:ID.u2, name:"Laura Sánchez",   email:"laura@mail.com",  phone:"+34 698 765 432", age:32, height:165, goal:"Pérdida de grasa y tonificación",startDate:"2024-02-20", status:"active", avatar:"LS", personalNotes:"Alergia al gluten. Prefiere entrenar por las mañanas.", injuries:"Sin lesiones actuales." },
-    { id:ID.c3, userId:ID.u3, name:"Miguel Torres",   email:"miguel@mail.com", phone:"+34 655 111 222", age:45, height:182, goal:"Mantenimiento y salud general",  startDate:"2023-11-01", status:"active", avatar:"MT", personalNotes:"Nivel intermedio. Experiencia previa en gym.", injuries:"Hernia lumbar L4-L5. Evitar cargas axiales." },
+    { id:ID.c1, userId:ID.u1, name:"Carlos Martínez", email:"carlos@mail.com", phone:"+34 612 345 678", age:28, height:178, goal:"Hipertrofia muscular", startDate:"2024-01-15", status:"active", avatar:"CM", personalNotes:"Trabaja en oficina, puede entrenar por las tardes.", injuries:"Leve molestia en hombro derecho. Evitar press militar pesado." },
   ],
   weightHistory: {
     [ID.c1]: [{date:"2024-01-15",weight:75.2},{date:"2024-02-01",weight:76.0},{date:"2024-02-15",weight:76.8},{date:"2024-03-01",weight:77.5},{date:"2024-03-15",weight:78.1},{date:"2024-04-01",weight:78.9}],
-    [ID.c2]: [{date:"2024-02-20",weight:68.5},{date:"2024-03-01",weight:67.8},{date:"2024-03-15",weight:67.2},{date:"2024-04-01",weight:66.5},{date:"2024-04-15",weight:65.9}],
-    [ID.c3]: [{date:"2023-11-01",weight:88.0},{date:"2023-12-01",weight:87.4},{date:"2024-01-01",weight:86.8},{date:"2024-02-01",weight:86.2},{date:"2024-03-01",weight:85.5},{date:"2024-04-01",weight:85.0}],
   },
   routines: {
     [ID.c1]: { name:"Hipertrofia – Upper/Lower Split", days:[
@@ -312,252 +306,13 @@ const INITIAL_DB = {
         {name:"Gemelo de Pie",sets:4,reps:"15-20",rest:"60s",notes:""},
       ]},
     ]},
-    [ID.c2]: { name:"Definición – Full Body 3x/Semana", days:[
-      { id:"d1", name:"Lunes – Full Body A", coachTip:"Día de full body. Mantén los descansos cortos (90s máx) para mantener el ritmo cardíaco elevado. En el hip thrust aprieta el glúteo en la parte alta y mantén 1 segundo. ¡Eso marca la diferencia!", exercises:[
-        {name:"Sentadilla Goblet",sets:3,reps:"15",rest:"90s",notes:""},
-        {name:"Press Banca Mancuernas",sets:3,reps:"12",rest:"90s",notes:""},
-        {name:"Hip Thrust",sets:3,reps:"15",rest:"90s",notes:"Activación glúteo"},
-        {name:"Plancha",sets:3,reps:"45s",rest:"60s",notes:""},
-      ]},
-      { id:"d2", name:"Miércoles – Full Body B", coachTip:"A mitad de semana, el cuerpo puede estar algo cargado. Si notas fatiga, reduce el peso un 10% — mejor entrenar bien con menos que mal con más. Las zancadas son tu ejercicio estrella hoy.", exercises:[
-        {name:"Peso Muerto Rumano",sets:3,reps:"12",rest:"90s",notes:""},
-        {name:"Press Arnold",sets:3,reps:"12",rest:"90s",notes:""},
-        {name:"Zancadas",sets:3,reps:"12 c/l",rest:"90s",notes:""},
-      ]},
-      { id:"d3", name:"Viernes – Full Body C", coachTip:"Último día de la semana, ¡termina fuerte! El peso muerto a una pierna es técnico — no lo apresures. Si te tambaleas, reduce el peso. Disfruta el proceso, los resultados ya vienen.", exercises:[
-        {name:"Sentadilla Sumo",sets:3,reps:"15",rest:"90s",notes:""},
-        {name:"Fondos en Banco",sets:3,reps:"12-15",rest:"90s",notes:""},
-        {name:"Peso Muerto 1 Pierna",sets:3,reps:"10 c/l",rest:"90s",notes:""},
-      ]},
-    ]},
-    [ID.c3]: { name:"Mantenimiento – PPL 3x/Semana", days:[
-      { id:"d1", name:"Lunes – Push", coachTip:"Recuerda: sin cargas axiales en espalda. Todos los ejercicios están seleccionados para respetar tu hernia lumbar. Si en algún momento notas tensión lumbar, para y avísame.", exercises:[
-        {name:"Press Banca Plano",sets:3,reps:"10",rest:"2min",notes:""},
-        {name:"Elevaciones Laterales",sets:3,reps:"15",rest:"60s",notes:""},
-        {name:"Fondos en Máquina",sets:3,reps:"12",rest:"90s",notes:""},
-      ]},
-      { id:"d2", name:"Miércoles – Pull", coachTip:"El Face Pull es clave para la salud de tus hombros y rotadores. No lo saltes aunque parezca poco. Hazlo siempre al final y con técnica perfecta, no con peso.", exercises:[
-        {name:"Jalón al Pecho Polea",sets:3,reps:"10-12",rest:"90s",notes:""},
-        {name:"Face Pull",sets:3,reps:"15",rest:"60s",notes:"Salud rotador"},
-      ]},
-      { id:"d3", name:"Viernes – Legs", coachTip:"Prensa en lugar de sentadilla para proteger tu lumbar. Controla siempre el movimiento excéntrico (bajada) — es donde más se trabaja el músculo. Termina la semana con energía.", exercises:[
-        {name:"Prensa de Piernas",sets:3,reps:"12-15",rest:"2min",notes:"Evitar carga axial"},
-        {name:"Curl Femoral",sets:3,reps:"15",rest:"90s",notes:""},
-        {name:"Gemelo en Máquina",sets:4,reps:"20",rest:"60s",notes:""},
-      ]},
-    ]},
   },
-  diets: {
-    [ID.c1]: {
-      name: "Dieta Hiperproteica – Volumen Limpio",
-      calories: 2800, protein: 180, carbs: 320, fat: 80,
-      meals: [
-        {
-          id: "m1", title: "Comida 1", subtitle: "Desayuno / Inicio del día", time: "8:00", kcal: 620,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Huevos enteros", amount: "2 uds + 20g whey + 100ml claras", emoji: "🥚" },
-              { id: "i2", name: "Jamón ibérico", amount: "75g", emoji: "🥩" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Avena", amount: "80g", emoji: "🌾" },
-              { id: "i4", name: "Pan integral", amount: "50g", emoji: "🍞" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i5", name: "Leche desnatada", amount: "300ml", emoji: "🥛" },
-              { id: "i6", name: "Multivitamínico + Omega 3", amount: "1 + 2 cápsulas", emoji: "💊" },
-            ]},
-          ]
-        },
-        {
-          id: "m2", title: "Comida 2", subtitle: "Mediodía", time: "14:00", kcal: 750,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Pechuga de pollo", amount: "200g", emoji: "🍗" },
-              { id: "i2", name: "Atún al natural", amount: "200g", emoji: "🐟" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Arroz cocido", amount: "250g", emoji: "🍚" },
-              { id: "i4", name: "Patata cocida", amount: "250g", emoji: "🥔" },
-            ]},
-            { id: "s3", type: "fats", title: "Grasas", items: [
-              { id: "i5", name: "AOVE", amount: "20ml", emoji: "🫒" },
-            ]},
-            { id: "s4", type: "extras", title: "Adicionales", items: [
-              { id: "i6", name: "Ensalada variada", amount: "Sin límite", emoji: "🥗" },
-            ]},
-          ]
-        },
-        {
-          id: "m3", title: "Comida 3", subtitle: "Pre-Entreno", time: "17:30", kcal: 420,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Huevos revueltos", amount: "2 uds", emoji: "🍳" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i2", name: "Tostadas integrales", amount: "2 uds", emoji: "🍞" },
-              { id: "i3", name: "Fruta del tiempo", amount: "1 pieza", emoji: "🍌" },
-            ]},
-            { id: "s3", type: "intraWorkout", title: "Intra-Entreno", items: [
-              { id: "i4", name: "Agua", amount: "Mínimo 500ml", emoji: "💧" },
-              { id: "i5", name: "Creatina", amount: "5g", emoji: "⚗️" },
-              { id: "i6", name: "MAP / Esenciales", amount: "5g", emoji: "💊" },
-            ]},
-          ]
-        },
-        {
-          id: "m4", title: "Comida 4", subtitle: "Post-Entreno / Cena", time: "20:30", kcal: 780,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Proteína Whey", amount: "40g", emoji: "🥤" },
-              { id: "i2", name: "Merluza al horno", amount: "200g", emoji: "🐟" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Plátano", amount: "1 grande", emoji: "🍌" },
-              { id: "i4", name: "Patata cocida", amount: "200g", emoji: "🥔" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i5", name: "Verduras al vapor", amount: "Sin límite", emoji: "🥦" },
-            ]},
-          ]
-        },
-      ]
-    },
-    [ID.c2]: {
-      name: "Dieta Hipocalórica – Sin Gluten",
-      calories: 1700, protein: 140, carbs: 160, fat: 55,
-      meals: [
-        {
-          id: "m1", title: "Comida 1", subtitle: "Desayuno / Inicio del día", time: "7:30", kcal: 280,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Claras de huevo", amount: "3 uds", emoji: "🥚" },
-              { id: "i2", name: "Huevo entero", amount: "1 ud", emoji: "🍳" },
-            ]},
-            { id: "s2", type: "extras", title: "Adicionales", items: [
-              { id: "i3", name: "Fruta del tiempo", amount: "150g", emoji: "🍓" },
-              { id: "i4", name: "Café solo", amount: "1 taza", emoji: "☕" },
-            ]},
-          ]
-        },
-        {
-          id: "m2", title: "Comida 2", subtitle: "Mediodía", time: "13:30", kcal: 480,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Pechuga de pavo", amount: "180g", emoji: "🍗" },
-              { id: "i2", name: "Salmón fresco", amount: "150g", emoji: "🐟" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Patata dulce", amount: "200g", emoji: "🥔" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i4", name: "Ensalada variada", amount: "Sin límite", emoji: "🥗" },
-            ]},
-          ]
-        },
-        {
-          id: "m3", title: "Comida 3", subtitle: "Merienda", time: "17:00", kcal: 180,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Yogur griego 0%", amount: "200g", emoji: "🥛" },
-            ]},
-            { id: "s2", type: "extras", title: "Adicionales", items: [
-              { id: "i2", name: "Semillas de chía", amount: "15g", emoji: "🌱" },
-              { id: "i3", name: "Fruta", amount: "1 pieza", emoji: "🍎" },
-            ]},
-          ]
-        },
-        {
-          id: "m4", title: "Comida 4", subtitle: "Cena / Final del día", time: "20:30", kcal: 420,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Salmón al horno", amount: "200g", emoji: "🐟" },
-              { id: "i2", name: "Merluza", amount: "200g", emoji: "🐠" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Pan sin gluten", amount: "1 rebanada", emoji: "🍞" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i4", name: "Verduras asadas", amount: "Sin límite", emoji: "🥦" },
-            ]},
-          ]
-        },
-      ]
-    },
-    [ID.c3]: {
-      name: "Dieta de Mantenimiento – Antiinflamatoria",
-      calories: 2200, protein: 150, carbs: 230, fat: 70,
-      meals: [
-        {
-          id: "m1", title: "Comida 1", subtitle: "Desayuno / Inicio del día", time: "8:00", kcal: 520,
-          sections: [
-            { id: "s1", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i1", name: "Copos de avena", amount: "70g", emoji: "🌾" },
-            ]},
-            { id: "s2", type: "fats", title: "Grasas", items: [
-              { id: "i2", name: "Nueces", amount: "20g", emoji: "🥜" },
-              { id: "i3", name: "Frutos secos variados", amount: "20g", emoji: "🌰" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i4", name: "Leche vegetal", amount: "250ml", emoji: "🥛" },
-              { id: "i5", name: "Fruta de temporada", amount: "1 pieza", emoji: "🍓" },
-            ]},
-          ]
-        },
-        {
-          id: "m2", title: "Comida 2", subtitle: "Mediodía", time: "14:00", kcal: 620,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Pez azul (sardinas / caballa)", amount: "200g", emoji: "🐟" },
-              { id: "i2", name: "Salmón fresco", amount: "200g", emoji: "🐠" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Legumbre cocida", amount: "150g", emoji: "🫘" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i4", name: "Ensalada variada", amount: "Sin límite", emoji: "🥗" },
-            ]},
-          ]
-        },
-        {
-          id: "m3", title: "Comida 3", subtitle: "Merienda", time: "17:00", kcal: 220,
-          sections: [
-            { id: "s1", type: "fats", title: "Grasas", items: [
-              { id: "i1", name: "Frutos secos variados", amount: "2 puñados (~40g)", emoji: "🥜" },
-            ]},
-          ]
-        },
-        {
-          id: "m4", title: "Comida 4", subtitle: "Cena / Final del día", time: "21:00", kcal: 480,
-          sections: [
-            { id: "s1", type: "protein", title: "Proteína", items: [
-              { id: "i1", name: "Pechuga de pollo", amount: "200g", emoji: "🍗" },
-              { id: "i2", name: "Huevos", amount: "3 uds", emoji: "🥚" },
-            ]},
-            { id: "s2", type: "carbs", title: "Carbohidratos", items: [
-              { id: "i3", name: "Pan integral", amount: "1 trozo", emoji: "🍞" },
-            ]},
-            { id: "s3", type: "extras", title: "Adicionales", items: [
-              { id: "i4", name: "Verdura rehogada", amount: "Sin límite", emoji: "🥦" },
-            ]},
-          ]
-        },
-      ]
-    },
-  },
+  diets: {},
   coachNotes: {
     [ID.c1]:[
       {date:"2024-04-10",note:"Excelente semana. Superó el récord en press banca (100kg). Subir 2.5kg la próxima sesión.",type:"progress"},
       {date:"2024-03-25",note:"Comentó molestia en hombro derecho. Reducir volumen press militar.",type:"injury"},
       {date:"2024-03-10",note:"Check-in positivo. Buena adherencia a la dieta.",type:"nutrition"},
-    ],
-    [ID.c2]:[
-      {date:"2024-04-08",note:"Bajó 0.6kg esta semana. Muy buen progreso. Mantener déficit actual.",type:"progress"},
-      {date:"2024-03-20",note:"Semana complicada por viaje laboral. Adaptamos la dieta.",type:"general"},
-    ],
-    [ID.c3]:[
-      {date:"2024-04-05",note:"Revisión médica: hernia estable. Continuar con ejercicios de core.",type:"injury"},
-      {date:"2024-03-15",note:"Progreso sólido. Valorar añadir día extra de movilidad.",type:"general"},
     ],
   },
   checkins: {}, // populated from Supabase
