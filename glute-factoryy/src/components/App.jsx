@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.1";
+const APP_VERSION = "5.2";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1305,6 +1305,357 @@ const AdminSettings = ({ onBack, onChangelog }) => {
   );
 };
 
+// ─── AdminBaseDiets — manage editable base diets ─────────────────────────────
+const AdminBaseDiets = ({ onBack }) => {
+  const { currentUser, customFoods } = useApp();
+  const [selectedId, setSelectedId] = useState(null);
+  const [diets, setDiets] = useState({});
+  const [loading, setLoading] = useState(true);
+
+  const ALL_FOODS = [...FOOD_DB, ...(customFoods || []).map(f => ({
+    name: f.name, emoji: f.emoji || "🍽️",
+    prot: +f.prot, carb: +f.carb, fat: +f.fat, kcal: +f.kcal,
+    cat: f.cat, custom: true,
+  }))];
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const rows = await sb.select("base_diets", "?order=id");
+      const map = {};
+      (rows || []).forEach(r => { map[r.id] = r; });
+      setDiets(map);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  if (selectedId) {
+    return <BaseDietEditor baseDietId={selectedId} initialMeals={diets[selectedId]?.meals || []}
+      baseDietName={diets[selectedId]?.name || selectedId}
+      allFoods={ALL_FOODS} currentUser={currentUser}
+      onBack={() => { setSelectedId(null); load(); }}/>;
+  }
+
+  const diet1800 = diets["female-1800"];
+  const diet3000 = diets["male-3000"];
+  const countMeals = d => d?.meals?.length || 0;
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+      <div style={{ fontSize: 20, fontWeight: 900, color: t.text, marginBottom: 6 }}>Dietas base</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>Estas son las plantillas que se aplican con "Generar dieta base"</div>
+
+      {loading && <div style={{ textAlign:"center", color:t.textSub, padding:40, animation:"pulse 1.5s infinite" }}>Cargando...</div>}
+
+      {!loading && (
+        <>
+          <button onClick={() => setSelectedId("female-1800")}
+            style={{ width: "100%", background: t.bgCard, border: `1.5px solid rgba(224,90,138,0.25)`, borderRadius: 14, padding: "16px 18px", marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: "linear-gradient(135deg, #e05a8a, #c04070)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: "white", fontWeight: 900 }}>♀</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Mujer · 1800 kcal</div>
+              <div style={{ fontSize: 12, color: t.textSub, marginTop: 3 }}>
+                {countMeals(diet1800) === 0 ? "Usando plantilla por defecto" : `${countMeals(diet1800)} comida${countMeals(diet1800) !== 1 ? "s" : ""} · Personalizada`}
+              </div>
+            </div>
+            <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+          </button>
+
+          <button onClick={() => setSelectedId("male-3000")}
+            style={{ width: "100%", background: t.bgCard, border: `1.5px solid rgba(30,155,191,0.25)`, borderRadius: 14, padding: "16px 18px", marginBottom: 12, display: "flex", alignItems: "center", gap: 14, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: `linear-gradient(135deg, ${t.accent}, ${t.accentDim})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: "white", fontWeight: 900 }}>♂</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: t.text }}>Hombre · 3000 kcal</div>
+              <div style={{ fontSize: 12, color: t.textSub, marginTop: 3 }}>
+                {countMeals(diet3000) === 0 ? "Usando plantilla por defecto" : `${countMeals(diet3000)} comida${countMeals(diet3000) !== 1 ? "s" : ""} · Personalizada`}
+              </div>
+            </div>
+            <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+          </button>
+
+          <div style={{ fontSize: 11, color: t.textDim, marginTop: 14, lineHeight: 1.6, padding: "12px 14px", background: t.bgElevated, borderRadius: 10 }}>
+            💡 Al editar una dieta base, cuando el admin pulse "Generar dieta base" en el perfil de un cliente se aplicará la versión guardada aquí. Si no se edita ninguna, se usa la plantilla por defecto del código.
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ─── BaseDietEditor — same editor as AEditDiet but saves to base_diets ───────
+const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, currentUser, onBack }) => {
+  const [meals, setMeals] = useState(initialMeals);
+  const [openMeal, setOpenMeal] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Defaults helper (reused)
+  const mkDefaultMeals = () => {
+    if (baseDietId === "female-1800") {
+      return [
+        { id:"m1", title:"Comida 1", subtitle:"Desayuno", time:"08:00", sections:[
+          {id:"s-p-m1",type:"protein",title:"Proteínas",items:[mkItem2("Claras de huevo",200,allFoods),mkItem2("Huevos enteros",100,allFoods)].filter(Boolean)},
+          {id:"s-c-m1",type:"carbs",title:"Hidratos",items:[mkItem2("Avena",50,allFoods),mkItem2("Pan",60,allFoods)].filter(Boolean)},
+          {id:"s-f-m1",type:"fat",title:"Grasas",items:[mkItem2("Crema cacahuete",15,allFoods),mkItem2("Aguacate",50,allFoods)].filter(Boolean)},
+        ]},
+        { id:"m2", title:"Comida 2", subtitle:"Almuerzo", time:"14:00", sections:[
+          {id:"s-p-m2",type:"protein",title:"Proteínas",items:[mkItem2("Pollo / Pavo",130,allFoods),mkItem2("Ternera (magra)",120,allFoods)].filter(Boolean)},
+          {id:"s-c-m2",type:"carbs",title:"Hidratos",items:[mkItem2("Arroz (seco)",70,allFoods),mkItem2("Pasta (seca)",65,allFoods)].filter(Boolean)},
+          {id:"s-f-m2",type:"fat",title:"Grasas",items:[mkItem2("AOVE (Aceite)",10,allFoods),mkItem2("Aguacate",60,allFoods)].filter(Boolean)},
+        ]},
+        { id:"m3", title:"Comida 3", subtitle:"Cena", time:"21:00", sections:[
+          {id:"s-p-m3",type:"protein",title:"Proteínas",items:[mkItem2("Pescado blanco",180,allFoods),mkItem2("Salmón ahumado",120,allFoods)].filter(Boolean)},
+          {id:"s-c-m3",type:"carbs",title:"Hidratos",items:[mkItem2("Patata",250,allFoods),mkItem2("Boniato",220,allFoods)].filter(Boolean)},
+          {id:"s-f-m3",type:"fat",title:"Grasas",items:[mkItem2("AOVE (Aceite)",10,allFoods),mkItem2("Queso Havarti",25,allFoods)].filter(Boolean)},
+        ]},
+        { id:"m4", title:"Comida Post-Entreno", subtitle:"Después del entrenamiento", time:"18:00", sections:[
+          {id:"s-p-m4",type:"protein",title:"Proteínas",items:[mkItem2("Whey Protein",30,allFoods),mkItem2("Yogur de proteína",200,allFoods)].filter(Boolean)},
+          {id:"s-c-m4",type:"carbs",title:"Hidratos",items:[mkItem2("Crema de arroz",50,allFoods),mkItem2("Corn Flakes 0%",50,allFoods)].filter(Boolean)},
+          {id:"s-f-m4",type:"fat",title:"Grasas",items:[mkItem2("Frutos secos",30,allFoods),mkItem2("Chocolate 85%",20,allFoods)].filter(Boolean)},
+        ]},
+      ];
+    }
+    return [
+      { id:"m1", title:"Comida 1", subtitle:"Desayuno", time:"08:00", sections:[
+        {id:"s-p-m1",type:"protein",title:"Proteínas",items:[mkItem2("Claras de huevo",250,allFoods),mkItem2("Huevos enteros",150,allFoods)].filter(Boolean)},
+        {id:"s-c-m1",type:"carbs",title:"Hidratos",items:[mkItem2("Avena",80,allFoods),mkItem2("Pan",100,allFoods)].filter(Boolean)},
+        {id:"s-f-m1",type:"fat",title:"Grasas",items:[mkItem2("Crema cacahuete",20,allFoods),mkItem2("Aguacate",70,allFoods)].filter(Boolean)},
+      ]},
+      { id:"m2", title:"Comida 2", subtitle:"Almuerzo", time:"14:00", sections:[
+        {id:"s-p-m2",type:"protein",title:"Proteínas",items:[mkItem2("Pollo / Pavo",250,allFoods),mkItem2("Ternera (magra)",230,allFoods)].filter(Boolean)},
+        {id:"s-c-m2",type:"carbs",title:"Hidratos",items:[mkItem2("Arroz (seco)",110,allFoods),mkItem2("Pasta (seca)",100,allFoods)].filter(Boolean)},
+        {id:"s-f-m2",type:"fat",title:"Grasas",items:[mkItem2("AOVE (Aceite)",12,allFoods),mkItem2("Aguacate",80,allFoods)].filter(Boolean)},
+      ]},
+      { id:"m3", title:"Comida 3", subtitle:"Cena", time:"21:00", sections:[
+        {id:"s-p-m3",type:"protein",title:"Proteínas",items:[mkItem2("Pescado blanco",300,allFoods),mkItem2("Salmón ahumado",200,allFoods)].filter(Boolean)},
+        {id:"s-c-m3",type:"carbs",title:"Hidratos",items:[mkItem2("Patata",450,allFoods),mkItem2("Boniato",400,allFoods)].filter(Boolean)},
+        {id:"s-f-m3",type:"fat",title:"Grasas",items:[mkItem2("AOVE (Aceite)",12,allFoods),mkItem2("Queso Havarti",35,allFoods)].filter(Boolean)},
+      ]},
+      { id:"m4", title:"Comida Post-Entreno", subtitle:"Después del entrenamiento", time:"18:00", sections:[
+        {id:"s-p-m4",type:"protein",title:"Proteínas",items:[mkItem2("Whey Protein",60,allFoods),mkItem2("Yogur de proteína",400,allFoods)].filter(Boolean)},
+        {id:"s-c-m4",type:"carbs",title:"Hidratos",items:[mkItem2("Crema de arroz",80,allFoods),mkItem2("Corn Flakes 0%",80,allFoods)].filter(Boolean)},
+        {id:"s-f-m4",type:"fat",title:"Grasas",items:[mkItem2("Frutos secos",30,allFoods),mkItem2("Chocolate 85%",25,allFoods)].filter(Boolean)},
+      ]},
+    ];
+  };
+
+  useEffect(() => {
+    if (!meals || meals.length === 0) {
+      setMeals(mkDefaultMeals());
+    }
+  }, []);
+
+  // Auto-calculate totals — only first option (A) of each section
+  const totals = (() => {
+    let kcal = 0, prot = 0, carb = 0, fat = 0;
+    (meals || []).forEach(m => {
+      (m.sections || []).forEach(s => {
+        const firstItem = s.items?.[0];
+        if (firstItem?.macros) {
+          kcal += +firstItem.macros.kcal || 0;
+          prot += +firstItem.macros.prot || 0;
+          carb += +firstItem.macros.carb || 0;
+          fat  += +firstItem.macros.fat  || 0;
+        }
+      });
+    });
+    return { kcal: Math.round(kcal), prot: prot.toFixed(0), carb: carb.toFixed(0), fat: fat.toFixed(0) };
+  })();
+
+  const save = async () => {
+    setSaving(true);
+    await sb.upsert("base_diets", {
+      id: baseDietId, name: baseDietName, gender: baseDietId.startsWith("female") ? "female" : "male",
+      meals, updated_by: currentUser.id, updated_at: new Date().toISOString(),
+    });
+    setSaved(true); setSaving(false);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const resetToDefault = () => {
+    if (!confirm("Esto eliminará tus cambios y restaurará la plantilla original. ¿Continuar?")) return;
+    setMeals(mkDefaultMeals());
+  };
+
+  const updMeal = (id, k, v) => setMeals(p => p.map(m => m.id === id ? { ...m, [k]: v } : m));
+  const rmMeal = id => setMeals(p => p.filter(m => m.id !== id));
+  const addMeal = () => {
+    const id = "m" + Date.now();
+    setMeals(p => [...p, {
+      id, title: `Comida ${p.length + 1}`, subtitle: "", time: "",
+      sections: [
+        { id: "s-p-" + id, type: "protein", title: "Proteínas", items: [] },
+        { id: "s-c-" + id, type: "carbs", title: "Hidratos", items: [] },
+        { id: "s-f-" + id, type: "fat", title: "Grasas", items: [] },
+      ],
+    }]);
+    setOpenMeal(id);
+  };
+
+  const rmItem = (mealId, secId, iid) => setMeals(p => p.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.filter(i => i.id !== iid) }) }));
+
+  const updItemGrams = (mealId, secId, iid, newGrams) => {
+    setMeals(p => p.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.map(i => {
+      if (i.id !== iid) return i;
+      const food = allFoods.find(f => f.name === i.foodName);
+      if (!food) return { ...i, amount: `${newGrams}g`, grams: +newGrams };
+      const g = +newGrams || 0;
+      return { ...i, amount: `${g}g`, grams: g, macros: {
+        kcal: Math.round((food.kcal * g) / 100),
+        prot: ((food.prot * g) / 100).toFixed(1),
+        carb: ((food.carb * g) / 100).toFixed(1),
+        fat:  ((food.fat  * g) / 100).toFixed(1),
+      } };
+    }) }) }));
+  };
+
+  const addFoodItem = (mealId, secId, food, grams) => {
+    const g = +grams || 100;
+    const macros = {
+      kcal: Math.round((food.kcal * g) / 100),
+      prot: ((food.prot * g) / 100).toFixed(1),
+      carb: ((food.carb * g) / 100).toFixed(1),
+      fat:  ((food.fat  * g) / 100).toFixed(1),
+    };
+    const iid = "i" + Date.now();
+    setMeals(p => p.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros }] }) }));
+  };
+
+  const secConfig = {
+    protein: { label: "🥩 Proteínas", cat: "proteina",     color: "#e05a5a", border: "rgba(224,90,90,0.25)" },
+    carbs:   { label: "🍚 Hidratos",  cat: "carbohidrato", color: "#f0a030", border: "rgba(240,160,48,0.25)" },
+    fat:     { label: "🥑 Grasas",    cat: "grasa",        color: "#8ac942", border: "rgba(138,201,66,0.25)" },
+  };
+  const letters = ["A","B","C","D","E","F","G","H"];
+  const si = { background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:"8px 10px", color:t.text, fontSize:12, fontFamily:"inherit", outline:"none" };
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver a dietas base
+      </button>
+      <div style={{ fontSize: 20, fontWeight: 900, color: t.text, marginBottom: 16 }}>{baseDietName}</div>
+
+      {/* Totals */}
+      <div style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 4 }}>MACROS TOTALES (Opción A)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, textAlign: "center", marginTop: 10 }}>
+          {[["🔥","Kcal",totals.kcal,""],["💪","Prot",totals.prot,"g"],["🌾","Carbs",totals.carb,"g"],["🥑","Grasas",totals.fat,"g"]].map(([ico,lbl,val,unit]) => (
+            <div key={lbl} style={{ background: t.bgElevated, borderRadius: 10, padding: "10px 4px" }}>
+              <div style={{ fontSize: 16 }}>{ico}</div>
+              <div style={{ fontSize: 17, fontWeight: 900, color: t.text }}>{val}{unit}</div>
+              <div style={{ fontSize: 10, color: t.textSub, fontWeight: 700 }}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Meals */}
+      {(meals || []).map(meal => {
+        const isOpen = openMeal === meal.id;
+        return (
+          <div key={meal.id} style={{ border: `1.5px solid ${isOpen ? "rgba(13,142,173,0.3)" : t.border}`, borderRadius: 14, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: isOpen ? "rgba(13,142,173,0.06)" : "transparent" }}>
+              <button onClick={() => setOpenMeal(isOpen ? null : meal.id)}
+                style={{ flex: 1, background: "none", border: "none", cursor: "pointer", textAlign: "left", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ color: isOpen ? t.accent : t.textDim, transform: isOpen ? "rotate(180deg)" : "none" }}><Icon n="down" s={15}/></div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>{meal.title}</div>
+              </button>
+              <button onClick={() => rmMeal(meal.id)} style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, padding: "0 10px", height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center" }}><Icon n="trash" s={13}/></button>
+            </div>
+
+            {isOpen && (
+              <div style={{ padding: "0 14px 14px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
+                  <div>
+                    <div style={{ color: t.textSub, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>TÍTULO</div>
+                    <input value={meal.title} onChange={e => updMeal(meal.id, "title", e.target.value)} style={{ ...si, width: "100%", boxSizing: "border-box" }}/>
+                  </div>
+                  <div>
+                    <div style={{ color: t.textSub, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>SUBTÍTULO</div>
+                    <input value={meal.subtitle || ""} onChange={e => updMeal(meal.id, "subtitle", e.target.value)} style={{ ...si, width: "100%", boxSizing: "border-box" }}/>
+                  </div>
+                  <div>
+                    <div style={{ color: t.textSub, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>HORA</div>
+                    <input value={meal.time || ""} onChange={e => updMeal(meal.id, "time", e.target.value)} style={{ ...si, width: "100%", boxSizing: "border-box" }}/>
+                  </div>
+                </div>
+
+                {(meal.sections || []).map(sec => {
+                  const cfg = secConfig[sec.type] || secConfig.protein;
+                  const foodOptions = allFoods.filter(f => f.cat === cfg.cat);
+                  return (
+                    <div key={sec.id} style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${cfg.border}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: cfg.color, marginBottom: 8 }}>{cfg.label}</div>
+                      {(sec.items || []).map((item, idx) => (
+                        <div key={item.id} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                            <div style={{ background: cfg.color, color: "white", borderRadius: 8, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900 }}>{letters[idx] || "?"}</div>
+                            <span style={{ fontSize: 16 }}>{item.emoji || "🍽️"}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, color: t.text, fontWeight: 700 }}>Opción {letters[idx]}: {item.name}</div>
+                              {item.macros && <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>{item.macros.kcal} kcal · {item.macros.prot}P · {item.macros.carb}C · {item.macros.fat}G</div>}
+                            </div>
+                            <button onClick={() => rmItem(meal.id, sec.id, item.id)} style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 28, height: 28, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon n="x" s={13}/></button>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) - 10))}
+                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>−</button>
+                            <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
+                              <div style={{ fontSize: 16, fontWeight: 900, color: cfg.color }}>{item.grams || 100}<span style={{ fontSize: 11, color: t.textSub, marginLeft: 2 }}>g</span></div>
+                            </div>
+                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, (item.grams || 100) + 10)}
+                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>+</button>
+                          </div>
+                        </div>
+                      ))}
+                      <FoodSelector foods={foodOptions} onAdd={(food, grams) => addFoodItem(meal.id, sec.id, food, grams)} accentColor={cfg.color} nextLetter={letters[sec.items?.length || 0] || "?"}/>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 6, marginBottom: 16 }}>
+        <Btn onClick={addMeal} variant="ghost" size="sm"><Icon n="plus" s={14}/> Comida</Btn>
+        <Btn onClick={save} disabled={saving} size="sm">
+          {saving ? "Guardando..." : saved ? <><Icon n="check" s={14}/> Guardado</> : <><Icon n="edit" s={14}/> Guardar plantilla</>}
+        </Btn>
+      </div>
+
+      <button onClick={resetToDefault}
+        style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 10, padding: "10px 16px", cursor: "pointer", color: t.textSub, fontSize: 12, fontFamily: "inherit", width: "100%" }}>
+        🔄 Restaurar plantilla original
+      </button>
+    </div>
+  );
+};
+
+// Helper for BaseDietEditor (similar to mkItem in AEditDiet)
+const mkItem2 = (foodName, grams, foods) => {
+  const food = foods.find(f => f.name === foodName);
+  if (!food) return null;
+  const g = +grams;
+  return {
+    id: "i" + Date.now() + Math.random().toString(36).slice(2, 7),
+    name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name,
+    macros: {
+      kcal: Math.round((food.kcal * g) / 100),
+      prot: ((food.prot * g) / 100).toFixed(1),
+      carb: ((food.carb * g) / 100).toFixed(1),
+      fat:  ((food.fat  * g) / 100).toFixed(1),
+    },
+  };
+};
+
 // ─── AdminFoods — manage custom food database ────────────────────────────────
 const AdminFoods = ({ onBack }) => {
   const { currentUser, customFoods, loadCustomFoods } = useApp();
@@ -1898,6 +2249,7 @@ const AdminApp = () => {
     if (view === "changelog") return "📋 Actualizaciones";
     if (view === "notifications") return "🔔 Notificaciones";
     if (view === "foods") return "🍽️ Alimentos";
+    if (view === "basediets") return "🍴 Dietas base";
     return sel?.name;
   };
 
@@ -1946,7 +2298,7 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")} onBaseDiets={()=>setView("basediets")}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")}/>}
@@ -1955,12 +2307,13 @@ const AdminApp = () => {
         {view === "changelog" && <AdminChangelog onBack={() => setView("settings")}/>}
         {view === "notifications" && <AdminNotifications onBack={() => setView("list")} onSel={(clientId) => { setSelId(clientId); setView("detail"); }}/>}
         {view === "foods"     && <AdminFoods onBack={() => setView("list")}/>}
+        {view === "basediets" && <AdminBaseDiets onBack={() => setView("list")}/>}
       </div>
     </div>
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods, onBaseDiets }) => {
   const { currentUser } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
@@ -2067,6 +2420,17 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar alimentos</div>
         <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Añadir alimentos personalizados a la base de datos</div>
+      </div>
+      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+    </button>
+
+    {/* Manage base diets button — all admins */}
+    <button onClick={onBaseDiets}
+      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
+      <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🍴</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Editar dietas base</div>
+        <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Personalizar las plantillas Mujer 1800 y Hombre 3000</div>
       </div>
       <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
     </button>
@@ -2810,86 +3174,94 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
   };
 
   // Generate base diet — woman 1800 kcal
-  const generateBase1800 = () => {
+  // Default meals — used as fallback if Supabase is empty
+  const DEFAULT_FEMALE_MEALS = () => [
+    { id: "m1", title: "Comida 1", subtitle: "Desayuno", time: "08:00",
+      sections: [
+        { id: "s-p-m1", type: "protein", title: "Proteínas", items: [mkItem("Claras de huevo", 200), mkItem("Huevos enteros", 100)].filter(Boolean) },
+        { id: "s-c-m1", type: "carbs",   title: "Hidratos",  items: [mkItem("Avena", 50), mkItem("Pan", 60)].filter(Boolean) },
+        { id: "s-f-m1", type: "fat",     title: "Grasas",    items: [mkItem("Crema cacahuete", 15), mkItem("Aguacate", 50)].filter(Boolean) },
+      ],
+    },
+    { id: "m2", title: "Comida 2", subtitle: "Almuerzo", time: "14:00",
+      sections: [
+        { id: "s-p-m2", type: "protein", title: "Proteínas", items: [mkItem("Pollo / Pavo", 130), mkItem("Ternera (magra)", 120)].filter(Boolean) },
+        { id: "s-c-m2", type: "carbs",   title: "Hidratos",  items: [mkItem("Arroz (seco)", 70), mkItem("Pasta (seca)", 65)].filter(Boolean) },
+        { id: "s-f-m2", type: "fat",     title: "Grasas",    items: [mkItem("AOVE (Aceite)", 10), mkItem("Aguacate", 60)].filter(Boolean) },
+      ],
+    },
+    { id: "m3", title: "Comida 3", subtitle: "Cena", time: "21:00",
+      sections: [
+        { id: "s-p-m3", type: "protein", title: "Proteínas", items: [mkItem("Pescado blanco", 180), mkItem("Salmón ahumado", 120)].filter(Boolean) },
+        { id: "s-c-m3", type: "carbs",   title: "Hidratos",  items: [mkItem("Patata", 250), mkItem("Boniato", 220)].filter(Boolean) },
+        { id: "s-f-m3", type: "fat",     title: "Grasas",    items: [mkItem("AOVE (Aceite)", 10), mkItem("Queso Havarti", 25)].filter(Boolean) },
+      ],
+    },
+    { id: "m4", title: "Comida Post-Entreno", subtitle: "Después del entrenamiento", time: "18:00",
+      sections: [
+        { id: "s-p-m4", type: "protein", title: "Proteínas", items: [mkItem("Whey Protein", 30), mkItem("Yogur de proteína", 200)].filter(Boolean) },
+        { id: "s-c-m4", type: "carbs",   title: "Hidratos",  items: [mkItem("Crema de arroz", 50), mkItem("Corn Flakes 0%", 50)].filter(Boolean) },
+        { id: "s-f-m4", type: "fat",     title: "Grasas",    items: [mkItem("Frutos secos", 30), mkItem("Chocolate 85%", 20)].filter(Boolean) },
+      ],
+    },
+  ];
+
+  const DEFAULT_MALE_MEALS = () => [
+    { id: "m1", title: "Comida 1", subtitle: "Desayuno", time: "08:00",
+      sections: [
+        { id: "s-p-m1", type: "protein", title: "Proteínas", items: [mkItem("Claras de huevo", 250), mkItem("Huevos enteros", 150)].filter(Boolean) },
+        { id: "s-c-m1", type: "carbs",   title: "Hidratos",  items: [mkItem("Avena", 80), mkItem("Pan", 100)].filter(Boolean) },
+        { id: "s-f-m1", type: "fat",     title: "Grasas",    items: [mkItem("Crema cacahuete", 20), mkItem("Aguacate", 70)].filter(Boolean) },
+      ],
+    },
+    { id: "m2", title: "Comida 2", subtitle: "Almuerzo", time: "14:00",
+      sections: [
+        { id: "s-p-m2", type: "protein", title: "Proteínas", items: [mkItem("Pollo / Pavo", 250), mkItem("Ternera (magra)", 230)].filter(Boolean) },
+        { id: "s-c-m2", type: "carbs",   title: "Hidratos",  items: [mkItem("Arroz (seco)", 110), mkItem("Pasta (seca)", 100)].filter(Boolean) },
+        { id: "s-f-m2", type: "fat",     title: "Grasas",    items: [mkItem("AOVE (Aceite)", 12), mkItem("Aguacate", 80)].filter(Boolean) },
+      ],
+    },
+    { id: "m3", title: "Comida 3", subtitle: "Cena", time: "21:00",
+      sections: [
+        { id: "s-p-m3", type: "protein", title: "Proteínas", items: [mkItem("Pescado blanco", 300), mkItem("Salmón ahumado", 200)].filter(Boolean) },
+        { id: "s-c-m3", type: "carbs",   title: "Hidratos",  items: [mkItem("Patata", 450), mkItem("Boniato", 400)].filter(Boolean) },
+        { id: "s-f-m3", type: "fat",     title: "Grasas",    items: [mkItem("AOVE (Aceite)", 12), mkItem("Queso Havarti", 35)].filter(Boolean) },
+      ],
+    },
+    { id: "m4", title: "Comida Post-Entreno", subtitle: "Después del entrenamiento", time: "18:00",
+      sections: [
+        { id: "s-p-m4", type: "protein", title: "Proteínas", items: [mkItem("Whey Protein", 60), mkItem("Yogur de proteína", 400)].filter(Boolean) },
+        { id: "s-c-m4", type: "carbs",   title: "Hidratos",  items: [mkItem("Crema de arroz", 80), mkItem("Corn Flakes 0%", 80)].filter(Boolean) },
+        { id: "s-f-m4", type: "fat",     title: "Grasas",    items: [mkItem("Frutos secos", 30), mkItem("Chocolate 85%", 25)].filter(Boolean) },
+      ],
+    },
+  ];
+
+  // Load base diet from Supabase, fallback to default
+  const loadAndApplyBaseDiet = async (baseDietId, defaultMeals, name) => {
     if (d.meals && d.meals.length > 0) {
       if (!confirm("Esto sustituirá la dieta actual. ¿Continuar?")) return;
     }
-    const mkMeal = (id, title, subtitle, time, protItems, carbItems, fatItems) => ({
-      id, title, subtitle, time,
-      sections: [
-        { id: "s-p-" + id, type: "protein", title: "Proteínas", items: protItems.filter(Boolean) },
-        { id: "s-c-" + id, type: "carbs",   title: "Hidratos",  items: carbItems.filter(Boolean) },
-        { id: "s-f-" + id, type: "fat",     title: "Grasas",    items: fatItems.filter(Boolean) },
-      ],
-    });
-
-    const newMeals = [
-      mkMeal("m1", "Comida 1", "Desayuno", "08:00",
-        [mkItem("Claras de huevo", 200), mkItem("Huevos enteros", 100)],
-        [mkItem("Avena", 50), mkItem("Pan", 60)],
-        [mkItem("Crema cacahuete", 15), mkItem("Aguacate", 50)]
-      ),
-      mkMeal("m2", "Comida 2", "Almuerzo", "14:00",
-        [mkItem("Pollo / Pavo", 130), mkItem("Ternera (magra)", 120)],
-        [mkItem("Arroz (seco)", 70), mkItem("Pasta (seca)", 65)],
-        [mkItem("AOVE (Aceite)", 10), mkItem("Aguacate", 60)]
-      ),
-      mkMeal("m3", "Comida 3", "Cena", "21:00",
-        [mkItem("Pescado blanco", 180), mkItem("Salmón ahumado", 120)],
-        [mkItem("Patata", 250), mkItem("Boniato", 220)],
-        [mkItem("AOVE (Aceite)", 10), mkItem("Queso Havarti", 25)]
-      ),
-      mkMeal("m4", "Comida Post-Entreno", "Después del entrenamiento", "18:00",
-        [mkItem("Whey Protein", 30), mkItem("Yogur de proteína", 200)],
-        [mkItem("Crema de arroz", 50), mkItem("Corn Flakes 0%", 50)],
-        [mkItem("Frutos secos", 30), mkItem("Chocolate 85%", 20)]
-      ),
-    ];
-
-    setD(p => ({ ...p, name: p.name || "Dieta Base Mujer 1800 kcal", meals: newMeals }));
-    setOpenMeal("m1");
-  };
-
-  // Generate base diet — man 3000 kcal
-  const generateBase3000 = () => {
-    if (d.meals && d.meals.length > 0) {
-      if (!confirm("Esto sustituirá la dieta actual. ¿Continuar?")) return;
+    try {
+      const rows = await sb.select("base_diets", `?id=eq.${baseDietId}`);
+      let meals;
+      if (rows?.length && rows[0].meals && Array.isArray(rows[0].meals) && rows[0].meals.length > 0) {
+        meals = rows[0].meals;
+      } else {
+        meals = defaultMeals();
+      }
+      setD(p => ({ ...p, name: p.name || name, meals }));
+      setOpenMeal(meals[0]?.id);
+    } catch {
+      // Fallback on error
+      const meals = defaultMeals();
+      setD(p => ({ ...p, name: p.name || name, meals }));
+      setOpenMeal(meals[0]?.id);
     }
-    const mkMeal = (id, title, subtitle, time, protItems, carbItems, fatItems) => ({
-      id, title, subtitle, time,
-      sections: [
-        { id: "s-p-" + id, type: "protein", title: "Proteínas", items: protItems.filter(Boolean) },
-        { id: "s-c-" + id, type: "carbs",   title: "Hidratos",  items: carbItems.filter(Boolean) },
-        { id: "s-f-" + id, type: "fat",     title: "Grasas",    items: fatItems.filter(Boolean) },
-      ],
-    });
-
-    const newMeals = [
-      mkMeal("m1", "Comida 1", "Desayuno", "08:00",
-        [mkItem("Claras de huevo", 250), mkItem("Huevos enteros", 150)],
-        [mkItem("Avena", 80), mkItem("Pan", 100)],
-        [mkItem("Crema cacahuete", 20), mkItem("Aguacate", 70)]
-      ),
-      mkMeal("m2", "Comida 2", "Almuerzo", "14:00",
-        [mkItem("Pollo / Pavo", 250), mkItem("Ternera (magra)", 230)],
-        [mkItem("Arroz (seco)", 110), mkItem("Pasta (seca)", 100)],
-        [mkItem("AOVE (Aceite)", 12), mkItem("Aguacate", 80)]
-      ),
-      mkMeal("m3", "Comida 3", "Cena", "21:00",
-        [mkItem("Pescado blanco", 300), mkItem("Salmón ahumado", 200)],
-        [mkItem("Patata", 450), mkItem("Boniato", 400)],
-        [mkItem("AOVE (Aceite)", 12), mkItem("Queso Havarti", 35)]
-      ),
-      mkMeal("m4", "Comida Post-Entreno", "Después del entrenamiento", "18:00",
-        [mkItem("Whey Protein", 60), mkItem("Yogur de proteína", 400)],
-        [mkItem("Crema de arroz", 80), mkItem("Corn Flakes 0%", 80)],
-        [mkItem("Frutos secos", 30), mkItem("Chocolate 85%", 25)]
-      ),
-    ];
-
-    setD(p => ({ ...p, name: p.name || "Dieta Base Hombre 3000 kcal", meals: newMeals }));
-    setOpenMeal("m1");
   };
+
+  const generateBase1800 = () => loadAndApplyBaseDiet("female-1800", DEFAULT_FEMALE_MEALS, "Dieta Base Mujer 1800 kcal");
+  const generateBase3000 = () => loadAndApplyBaseDiet("male-3000",   DEFAULT_MALE_MEALS,   "Dieta Base Hombre 3000 kcal");
 
   return (
     <div>
