@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "4.4";
+const APP_VERSION = "5.1";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -126,7 +126,7 @@ const mergeSupabaseIntoDb = (prev, { clients, weights, notes, clientData, checki
     const sbClients = clients.map(c => ({
       id: c.id, userId: c.user_id || c.id,
       name: c.name || "", email: c.email || "", phone: c.phone || "",
-      age: c.age || 0, height: c.height_cm || 0, goal: c.goal || "",
+      age: c.age || 0, height: c.height_cm || 0, gender: c.gender || "", goal: c.goal || "",
       personalNotes: c.personal_notes || "", injuries: c.injuries || "",
       status: c.status || "active",
       startDate: c.start_date || new Date().toISOString().slice(0, 10),
@@ -1305,6 +1305,150 @@ const AdminSettings = ({ onBack, onChangelog }) => {
   );
 };
 
+// ─── AdminFoods — manage custom food database ────────────────────────────────
+const AdminFoods = ({ onBack }) => {
+  const { currentUser, customFoods, loadCustomFoods } = useApp();
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ name: "", emoji: "🍽️", cat: "proteina", prot: "", carb: "", fat: "", kcal: "" });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+
+  useEffect(() => { loadCustomFoods(); }, []);
+
+  const resetForm = () => {
+    setForm({ name: "", emoji: "🍽️", cat: "proteina", prot: "", carb: "", fat: "", kcal: "" });
+    setErr("");
+  };
+
+  const saveFood = async () => {
+    if (!form.name.trim()) { setErr("Nombre obligatorio"); return; }
+    if (!form.kcal) { setErr("Calorías obligatorias"); return; }
+    setSaving(true); setErr("");
+    try {
+      await sb.insert("custom_foods", {
+        name: form.name.trim(),
+        emoji: form.emoji || "🍽️",
+        cat: form.cat,
+        prot: +form.prot || 0,
+        carb: +form.carb || 0,
+        fat: +form.fat || 0,
+        kcal: +form.kcal || 0,
+        created_by: currentUser.id,
+      });
+      await loadCustomFoods();
+      resetForm();
+      setShowAdd(false);
+    } catch (e) {
+      setErr("Error al guardar. ¿Quizá el nombre ya existe?");
+    }
+    setSaving(false);
+  };
+
+  const deleteFood = async (id, name) => {
+    if (!confirm(`¿Eliminar "${name}"?`)) return;
+    try {
+      await sb.remove("custom_foods", "id", id);
+      await loadCustomFoods();
+    } catch {}
+  };
+
+  const catColor = cat => cat === "proteina" ? "#e05a5a" : cat === "carbohidrato" ? "#f0a030" : "#8ac942";
+  const catLabel = cat => cat === "proteina" ? "🥩 Proteína" : cat === "carbohidrato" ? "🍚 Hidrato" : "🥑 Grasa";
+
+  const filtered = customFoods.filter(f =>
+    !search || f.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const fld = k => ({ value: form[k] || "", onChange: v => setForm(p => ({ ...p, [k]: v })) });
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+        <div style={{ fontSize: 20, fontWeight: 900, color: t.text }}>Alimentos personalizados</div>
+        <button onClick={() => { setShowAdd(s => !s); resetForm(); }}
+          style={{ background: t.accentAlpha, border:`1.5px solid rgba(30,155,191,0.3)`, borderRadius:10, padding:"7px 14px", cursor:"pointer", color:t.accent, fontSize:12, fontWeight:700, fontFamily:"inherit" }}>
+          {showAdd ? "Cancelar" : "+ Añadir"}
+        </button>
+      </div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>Se añadirán a la base de datos para usarlos en las dietas</div>
+
+      {/* Add form */}
+      {showAdd && (
+        <Card accent style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 14 }}>NUEVO ALIMENTO</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: "0 12px" }}>
+            <Field label="EMOJI" {...fld("emoji")} placeholder="🍽️"/>
+            <Field label="NOMBRE" {...fld("name")} placeholder="ej: Atún natural"/>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>CATEGORÍA</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["proteina","🥩 Proteína"],["carbohidrato","🍚 Hidrato"],["grasa","🥑 Grasa"]].map(([val, lbl]) => (
+                <button key={val} onClick={() => setForm(p => ({ ...p, cat: val }))}
+                  style={{ flex: 1, background: form.cat === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${form.cat === val ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "10px 6px", cursor: "pointer", color: form.cat === val ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>VALORES POR 100g</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+            <Field label="PROT (g)" {...fld("prot")} type="number"/>
+            <Field label="CARB (g)" {...fld("carb")} type="number"/>
+            <Field label="GRASA (g)" {...fld("fat")} type="number"/>
+            <Field label="KCAL" {...fld("kcal")} type="number"/>
+          </div>
+
+          {err && <div style={{ color: t.danger, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+
+          <Btn onClick={saveFood} disabled={saving} size="sm">
+            {saving ? "Guardando..." : "💾 Guardar alimento"}
+          </Btn>
+        </Card>
+      )}
+
+      {/* Search */}
+      {customFoods.length > 0 && (
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alimento..."
+          style={{ width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "11px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", marginBottom: 14 }}/>
+      )}
+
+      {/* List */}
+      {customFoods.length === 0 && !showAdd && (
+        <Empty icon="food" text="Aún no has añadido ningún alimento personalizado"/>
+      )}
+
+      {filtered.map(f => (
+        <Card key={f.id} style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 11, background: t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>{f.emoji || "🍽️"}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{f.name}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: catColor(f.cat), background: `${catColor(f.cat)}22`, padding: "2px 6px", borderRadius: 6 }}>{catLabel(f.cat)}</span>
+              </div>
+              <div style={{ fontSize: 11, color: t.textSub }}>
+                {f.prot}g P · {f.carb}g C · {f.fat}g G · {f.kcal} kcal <span style={{ color: t.textDim }}>/100g</span>
+              </div>
+            </div>
+            <button onClick={() => deleteFood(f.id, f.name)}
+              style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.danger, flexShrink: 0 }}>
+              <Icon n="trash" s={14}/>
+            </button>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+};
+
 // ─── AdminManagement — superadmin only ────────────────────────────────────────
 const AdminManagement = ({ onBack }) => {
   const { currentUser } = useApp();
@@ -1753,6 +1897,7 @@ const AdminApp = () => {
     if (view === "chat") return "💬 Chat Admin";
     if (view === "changelog") return "📋 Actualizaciones";
     if (view === "notifications") return "🔔 Notificaciones";
+    if (view === "foods") return "🍽️ Alimentos";
     return sel?.name;
   };
 
@@ -1801,7 +1946,7 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")}/>}
@@ -1809,12 +1954,13 @@ const AdminApp = () => {
         {view === "chat"      && <AdminChat/>}
         {view === "changelog" && <AdminChangelog onBack={() => setView("settings")}/>}
         {view === "notifications" && <AdminNotifications onBack={() => setView("list")} onSel={(clientId) => { setSelId(clientId); setView("detail"); }}/>}
+        {view === "foods"     && <AdminFoods onBack={() => setView("list")}/>}
       </div>
     </div>
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods }) => {
   const { currentUser } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
@@ -1913,6 +2059,17 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
         <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
       </button>
     )}
+
+    {/* Manage foods button — all admins */}
+    <button onClick={onFoods}
+      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
+      <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🍽️</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar alimentos</div>
+        <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Añadir alimentos personalizados a la base de datos</div>
+      </div>
+      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+    </button>
 
     {/* List */}
     {filtered.length === 0 && <Empty icon="users" text={filter==="done" ? "Ningún cliente ha hecho check-in esta semana" : filter==="pending" ? "Todos los clientes han hecho check-in 🎉" : "Sin clientes"}/>}
@@ -2044,6 +2201,7 @@ const AEditProfile = ({ client, db, setDb }) => {
       name: f.name, email: f.email, phone: f.phone,
       age: f.age ? parseInt(f.age) : null,
       height_cm: f.height ? parseInt(f.height) : null,
+      gender: f.gender || null,
       goal: f.goal, personal_notes: f.personalNotes,
       injuries: f.injuries, status: f.status || "active",
       start_date: f.startDate, avatar: f.avatar,
@@ -2126,6 +2284,25 @@ const AEditProfile = ({ client, db, setDb }) => {
         <Field label="EDAD"   {...fld("age")} type="number"/>
         <Field label="ALTURA (cm)" {...fld("height")} type="number"/>
       </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>GÉNERO</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={() => setF(p => ({ ...p, gender: "male" }))}
+            style={{ flex: 1, background: f.gender === "male" ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${f.gender === "male" ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "10px 10px", cursor: "pointer", color: f.gender === "male" ? t.accent : t.textSub, fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>
+            ♂ Hombre
+          </button>
+          <button type="button" onClick={() => setF(p => ({ ...p, gender: "female" }))}
+            style={{ flex: 1, background: f.gender === "female" ? "rgba(224,90,138,0.15)" : t.bgElevated, border: `1.5px solid ${f.gender === "female" ? "rgba(224,90,138,0.4)" : t.border}`, borderRadius: 10, padding: "10px 10px", cursor: "pointer", color: f.gender === "female" ? "#e05a8a" : t.textSub, fontSize: 13, fontWeight: 700, fontFamily: "inherit" }}>
+            ♀ Mujer
+          </button>
+          <button type="button" onClick={() => setF(p => ({ ...p, gender: "" }))}
+            style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px 14px", cursor: "pointer", color: t.textDim, fontSize: 12, fontFamily: "inherit" }}>
+            ✕
+          </button>
+        </div>
+      </div>
+
       <Field label="OBJETIVO" {...fld("goal")}/>
       <Field label="NOTAS PERSONALES" {...fld("personalNotes")} multiline rows={3}/>
       <Field label="LESIONES / LIMITACIONES" {...fld("injuries")} multiline rows={3}/>
@@ -2374,135 +2551,542 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
   );
 };
 
-// ─── AEditDiet — admin diet editor (v1.2) ────────────────────────────────────
+// ─── Food database (per 100g) ─────────────────────────────────────────────────
+const FOOD_DB = [
+  // Proteínas
+  { name:"Whey Protein",       emoji:"🥛", prot:78, fat:4,  carb:6,  kcal:370, cat:"proteina" },
+  { name:"Claras de huevo",    emoji:"🥚", prot:11, fat:0,  carb:1,  kcal:52,  cat:"proteina" },
+  { name:"Huevos enteros",     emoji:"🍳", prot:13, fat:11, carb:1,  kcal:155, cat:"proteina" },
+  { name:"Pollo / Pavo",       emoji:"🍗", prot:23, fat:2,  carb:0,  kcal:110, cat:"proteina" },
+  { name:"Ternera (magra)",    emoji:"🥩", prot:21, fat:6,  carb:0,  kcal:160, cat:"proteina" },
+  { name:"Pescado blanco",     emoji:"🐟", prot:18, fat:1,  carb:0,  kcal:82,  cat:"proteina" },
+  { name:"Gambas",             emoji:"🍤", prot:20, fat:1,  carb:1,  kcal:95,  cat:"proteina" },
+  { name:"Salmón ahumado",     emoji:"🐠", prot:21, fat:10, carb:0,  kcal:180, cat:"proteina" },
+  { name:"Jamón serrano",      emoji:"🥓", prot:28, fat:8,  carb:0,  kcal:190, cat:"proteina" },
+  { name:"Yogur de proteína",  emoji:"🥛", prot:10, fat:0,  carb:5,  kcal:60,  cat:"proteina" },
+  // Carbohidratos
+  { name:"Arroz (seco)",       emoji:"🍚", prot:7,  fat:1,  carb:78, kcal:350, cat:"carbohidrato" },
+  { name:"Pasta (seca)",       emoji:"🍝", prot:12, fat:2,  carb:72, kcal:355, cat:"carbohidrato" },
+  { name:"Avena",              emoji:"🌾", prot:13, fat:7,  carb:60, kcal:365, cat:"carbohidrato" },
+  { name:"Pan",                emoji:"🍞", prot:8,  fat:2,  carb:48, kcal:240, cat:"carbohidrato" },
+  { name:"Patata",             emoji:"🥔", prot:2,  fat:0,  carb:17, kcal:77,  cat:"carbohidrato" },
+  { name:"Boniato",            emoji:"🍠", prot:2,  fat:0,  carb:20, kcal:86,  cat:"carbohidrato" },
+  { name:"Crema de arroz",     emoji:"🍚", prot:7,  fat:1,  carb:80, kcal:360, cat:"carbohidrato" },
+  { name:"Corn Flakes 0%",     emoji:"🌽", prot:7,  fat:1,  carb:84, kcal:370, cat:"carbohidrato" },
+  { name:"Tortitas de trigo",  emoji:"🫓", prot:9,  fat:7,  carb:45, kcal:280, cat:"carbohidrato" },
+  { name:"Fruta (media)",      emoji:"🍎", prot:1,  fat:0,  carb:15, kcal:65,  cat:"carbohidrato" },
+  { name:"Frutos rojos",       emoji:"🫐", prot:1,  fat:0,  carb:10, kcal:45,  cat:"carbohidrato" },
+  // Grasas
+  { name:"AOVE (Aceite)",      emoji:"🫒", prot:0,  fat:100,carb:0,  kcal:884, cat:"grasa" },
+  { name:"Crema cacahuete",    emoji:"🥜", prot:24, fat:50, carb:15, kcal:600, cat:"grasa" },
+  { name:"Frutos secos",       emoji:"🥜", prot:20, fat:54, carb:7,  kcal:600, cat:"grasa" },
+  { name:"Aguacate",           emoji:"🥑", prot:2,  fat:15, carb:8,  kcal:160, cat:"grasa" },
+  { name:"Chocolate 85%",      emoji:"🍫", prot:9,  fat:45, carb:19, kcal:580, cat:"grasa" },
+  { name:"Queso Havarti",      emoji:"🧀", prot:20, fat:30, carb:1,  kcal:350, cat:"grasa" },
+];
+
+// ─── MacroCalculator — inline food picker ────────────────────────────────────
+const MacroCalculator = ({ onAdd }) => {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState(null);
+  const [grams, setGrams] = useState("100");
+  const [open, setOpen] = useState(false);
+
+  const results = (() => {
+    if (search.length < 2) return [];
+    const q = search.toLowerCase().trim();
+    if (q === "proteína" || q === "proteinas" || q === "proteína" || q === "proteina") return FOOD_DB.filter(f => f.cat === "proteina");
+    if (q === "carbohidrato" || q === "carbohidratos" || q === "carbo" || q === "hidratos") return FOOD_DB.filter(f => f.cat === "carbohidrato");
+    if (q === "grasa" || q === "grasas") return FOOD_DB.filter(f => f.cat === "grasa");
+    return FOOD_DB.filter(f => f.name.toLowerCase().includes(q));
+  })();
+
+  const macros = selected && grams ? {
+    prot: ((selected.prot * +grams) / 100).toFixed(1),
+    fat:  ((selected.fat  * +grams) / 100).toFixed(1),
+    carb: ((selected.carb * +grams) / 100).toFixed(1),
+    kcal: Math.round((selected.kcal * +grams) / 100),
+  } : null;
+
+  const handleAdd = () => {
+    if (!selected || !grams) return;
+    onAdd({
+      name: `${selected.name} (${grams}g)`,
+      emoji: selected.emoji,
+      amount: `${grams}g`,
+      macros,
+    });
+    setSelected(null); setSearch(""); setGrams("100"); setOpen(false);
+  };
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 10, padding: "7px 14px", cursor: "pointer", color: t.accent, fontSize: 12, fontWeight: 700, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+        🧮 {open ? "Cerrar calculadora" : "Calculadora de macros"}
+      </button>
+
+      {open && (
+        <div style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: 14, marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10 }}>CALCULADORA DE MACROS</div>
+
+          {/* Search */}
+          <input value={search} onChange={e => { setSearch(e.target.value); setSelected(null); }}
+            placeholder="Buscar alimento... (ej: pollo)"
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px 14px", color: t.text, fontSize: 13, fontFamily: "inherit", outline: "none", boxSizing: "border-box", marginBottom: 6 }}
+            onFocus={e => e.target.style.borderColor = t.accent}
+            onBlur={e => e.target.style.borderColor = t.border}
+          />
+
+          {/* Results */}
+          {results.length > 0 && !selected && (
+            <div style={{ background: t.bgElevated, borderRadius: 10, overflow: "hidden", marginBottom: 8, maxHeight: 180, overflowY: "auto" }}>
+              {results.map(f => (
+                <button key={f.name} onClick={() => { setSelected(f); setSearch(f.name); }}
+                  style={{ width: "100%", background: "none", border: "none", borderBottom: `1px solid ${t.border}`, padding: "9px 14px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", justify: "space-between", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 16 }}>{f.emoji}</span>
+                  <span style={{ flex: 1, fontSize: 13, color: t.text, fontWeight: 600 }}>{f.name}</span>
+                  <span style={{ fontSize: 11, color: t.textSub }}>{f.prot}P · {f.carb}C · {f.fat}G · {f.kcal}kcal</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Grams input + result */}
+          {selected && (
+            <div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 16 }}>{selected.emoji}</span>
+                <span style={{ fontSize: 13, color: t.text, fontWeight: 700, flex: 1 }}>{selected.name}</span>
+                <input type="number" value={grams} onChange={e => setGrams(e.target.value)} min="1" max="2000"
+                  style={{ width: 70, background: t.bgInput, border: `1.5px solid ${t.accent}`, borderRadius: 8, padding: "8px 10px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", textAlign: "center", fontWeight: 700 }}/>
+                <span style={{ fontSize: 12, color: t.textSub }}>g</span>
+              </div>
+
+              {macros && (
+                <div style={{ background: t.bgElevated, borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, textAlign: "center" }}>
+                    {[["🔥","Kcal",macros.kcal,""],["💪","Prot",macros.prot,"g"],["🌾","Carbs",macros.carb,"g"],["🥑","Grasas",macros.fat,"g"]].map(([ico,lbl,val,unit]) => (
+                      <div key={lbl} style={{ background: t.bgCard, borderRadius: 8, padding: "8px 4px" }}>
+                        <div style={{ fontSize: 14 }}>{ico}</div>
+                        <div style={{ fontSize: 15, fontWeight: 900, color: t.text }}>{val}{unit}</div>
+                        <div style={{ fontSize: 9, color: t.textSub, fontWeight: 700 }}>{lbl}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={handleAdd} size="sm"><Icon n="plus" s={13}/> Añadir a la comida</Btn>
+                <Btn onClick={() => { setSelected(null); setSearch(""); }} variant="ghost" size="sm">Cancelar</Btn>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── AEditDiet — admin diet editor (v2.0 — auto sections + auto macros) ──────
 const AEditDiet = ({ client, diet: init, db, setDb }) => {
-  const emptyDiet = { name:"", calories:0, protein:0, carbs:0, fat:0, meals:[] };
+  const { customFoods } = useApp();
+  const emptyDiet = { name:"", meals:[] };
   const [d, setD] = useState(init || emptyDiet);
   const [saved, setSaved] = useState(false);
   const [openMeal, setOpenMeal] = useState(null);
   useEffect(() => { setD(init||emptyDiet); setSaved(false); setOpenMeal(null); }, [client.id]);
 
-  const save = async () => { setDb(p=>({...p,diets:{...p.diets,[client.id]:d}})); setSaved(true); setTimeout(()=>setSaved(false),2000);
-    await sb.upsert("client_data", { client_id: client.id, diet_json: d, updated_at: new Date().toISOString() });
+  // Combined food DB: built-in + custom
+  const ALL_FOODS = [...FOOD_DB, ...(customFoods || []).map(f => ({
+    name: f.name, emoji: f.emoji || "🍽️",
+    prot: +f.prot, carb: +f.carb, fat: +f.fat, kcal: +f.kcal,
+    cat: f.cat, custom: true,
+  }))];
+
+  // Auto-calculate totals — only counts first option (A) of each section since options are alternatives
+  const totals = (() => {
+    let kcal = 0, prot = 0, carb = 0, fat = 0;
+    (d.meals || []).forEach(m => {
+      (m.sections || []).forEach(s => {
+        const firstItem = s.items?.[0];
+        if (firstItem?.macros) {
+          kcal += +firstItem.macros.kcal || 0;
+          prot += +firstItem.macros.prot || 0;
+          carb += +firstItem.macros.carb || 0;
+          fat  += +firstItem.macros.fat  || 0;
+        }
+      });
+    });
+    return { kcal: Math.round(kcal), prot: prot.toFixed(0), carb: carb.toFixed(0), fat: fat.toFixed(0) };
+  })();
+
+  const save = async () => {
+    const dietWithTotals = { ...d, calories: +totals.kcal, protein: +totals.prot, carbs: +totals.carb, fat: +totals.fat };
+    setDb(p=>({...p,diets:{...p.diets,[client.id]:dietWithTotals}}));
+    setSaved(true); setTimeout(()=>setSaved(false),2000);
+    await sb.upsert("client_data", { client_id: client.id, diet_json: dietWithTotals, updated_at: new Date().toISOString() });
   };
 
-  // Meal helpers
+  // Create meal with default 3 sections: protein / carb / fat
   const addMeal = () => {
     const id = "m" + Date.now();
-    setD(p=>({...p, meals:[...p.meals,{id,title:`Comida ${p.meals.length+1}`,subtitle:"",time:"",kcal:0,sections:[]}]}));
+    const newMeal = {
+      id, title: `Comida ${(d.meals?.length || 0) + 1}`, subtitle: "", time: "",
+      sections: [
+        { id: "s" + (Date.now() + 1), type: "protein", title: "Proteínas", items: [] },
+        { id: "s" + (Date.now() + 2), type: "carbs",   title: "Hidratos",  items: [] },
+        { id: "s" + (Date.now() + 3), type: "fat",     title: "Grasas",    items: [] },
+      ],
+    };
+    setD(p => ({ ...p, meals: [...(p.meals || []), newMeal] }));
     setOpenMeal(id);
   };
-  const rmMeal   = id => setD(p=>({...p,meals:p.meals.filter(m=>m.id!==id)}));
-  const updMeal  = (id,k,v) => setD(p=>({...p,meals:p.meals.map(m=>m.id===id?{...m,[k]:v}:m)}));
+  const rmMeal = id => setD(p => ({ ...p, meals: p.meals.filter(m => m.id !== id) }));
+  const updMeal = (id, k, v) => setD(p => ({ ...p, meals: p.meals.map(m => m.id === id ? { ...m, [k]: v } : m) }));
 
-  // Section helpers
-  const addSection = (mealId) => {
-    const sid = "s" + Date.now();
-    setD(p=>({...p,meals:p.meals.map(m=>m.id!==mealId?m:{...m,sections:[...m.sections,{id:sid,type:"extras",title:"",items:[]}]})}));
+  // Add food item from database with automatic macros
+  const addFoodItem = (mealId, secId, food, grams) => {
+    const g = +grams || 100;
+    const macros = {
+      kcal: Math.round((food.kcal * g) / 100),
+      prot: ((food.prot * g) / 100).toFixed(1),
+      carb: ((food.carb * g) / 100).toFixed(1),
+      fat:  ((food.fat  * g) / 100).toFixed(1),
+    };
+    const iid = "i" + Date.now();
+    setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros }] }) } ) }));
   };
-  const rmSection   = (mealId,sid) => setD(p=>({...p,meals:p.meals.map(m=>m.id!==mealId?m:{...m,sections:m.sections.filter(s=>s.id!==sid)})}));
-  const updSection  = (mealId,sid,k,v) => setD(p=>({...p,meals:p.meals.map(m=>m.id!==mealId?m:{...m,sections:m.sections.map(s=>s.id!==sid?s:{...s,[k]:v})})}));
 
-  // Item helpers
-  const addItem    = (mealId,sid) => setD(p=>({...p,meals:p.meals.map(m=>m.id!==mealId?m:{...m,sections:m.sections.map(s=>s.id!==sid?s:{...s,items:[...s.items,{id:"i"+Date.now(),name:"",amount:"",emoji:"🍽️",notes:""}]})})}));
-  const rmItem     = (mealId,sid,iid) => setD(p=>({...p,meals:p.meals.map(m=>m.id!==mealId?m:{...m,sections:m.sections.map(s=>s.id!==sid?s:{...s,items:s.items.filter(i=>i.id!==iid)})})}));
-  const updItem    = (mealId,sid,iid,k,v) => setD(p=>({...p,meals:p.meals.map(m=>m.id!==mealId?m:{...m,sections:m.sections.map(s=>s.id!==sid?s:{...s,items:s.items.map(i=>i.id!==iid?i:{...i,[k]:v})})})}));
+  const rmItem = (mealId, secId, iid) => setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.filter(i => i.id !== iid) }) }) }));
+
+  const updItemGrams = (mealId, secId, iid, newGrams) => {
+    setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.map(i => {
+      if (i.id !== iid) return i;
+      const food = ALL_FOODS.find(f => f.name === i.foodName);
+      if (!food) return { ...i, amount: `${newGrams}g`, grams: +newGrams };
+      const g = +newGrams || 0;
+      return { ...i, amount: `${g}g`, grams: g, macros: {
+        kcal: Math.round((food.kcal * g) / 100),
+        prot: ((food.prot * g) / 100).toFixed(1),
+        carb: ((food.carb * g) / 100).toFixed(1),
+        fat:  ((food.fat  * g) / 100).toFixed(1),
+      } };
+    }) }) }) }));
+  };
 
   const si = { background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:"8px 10px", color:t.text, fontSize:12, fontFamily:"inherit", outline:"none" };
-  const sectionTypes = Object.entries(SECTION_CONFIG).map(([k,v])=>({value:k,label:v.label}));
+
+  // Map section type to category label and color
+  const secConfig = {
+    protein: { label: "🥩 Proteínas", cat: "proteina",     color: "#e05a5a", border: "rgba(224,90,90,0.25)" },
+    carbs:   { label: "🍚 Hidratos",  cat: "carbohidrato", color: "#f0a030", border: "rgba(240,160,48,0.25)" },
+    fat:     { label: "🥑 Grasas",    cat: "grasa",        color: "#8ac942", border: "rgba(138,201,66,0.25)" },
+  };
+
+  // Helper: calculate macros for a food + grams
+  const calcMacros = (foodName, grams) => {
+    const food = ALL_FOODS.find(f => f.name === foodName);
+    if (!food) return null;
+    const g = +grams;
+    return {
+      kcal: Math.round((food.kcal * g) / 100),
+      prot: ((food.prot * g) / 100).toFixed(1),
+      carb: ((food.carb * g) / 100).toFixed(1),
+      fat:  ((food.fat  * g) / 100).toFixed(1),
+    };
+  };
+
+  // Helper: create a food item
+  const mkItem = (foodName, grams) => {
+    const food = ALL_FOODS.find(f => f.name === foodName);
+    if (!food) return null;
+    return {
+      id: "i" + Date.now() + Math.random().toString(36).slice(2, 7),
+      name: food.name, emoji: food.emoji, amount: `${grams}g`, grams: +grams,
+      foodName: food.name, macros: calcMacros(foodName, grams),
+    };
+  };
+
+  // Generate base diet — woman 1800 kcal
+  const generateBase1800 = () => {
+    if (d.meals && d.meals.length > 0) {
+      if (!confirm("Esto sustituirá la dieta actual. ¿Continuar?")) return;
+    }
+    const mkMeal = (id, title, subtitle, time, protItems, carbItems, fatItems) => ({
+      id, title, subtitle, time,
+      sections: [
+        { id: "s-p-" + id, type: "protein", title: "Proteínas", items: protItems.filter(Boolean) },
+        { id: "s-c-" + id, type: "carbs",   title: "Hidratos",  items: carbItems.filter(Boolean) },
+        { id: "s-f-" + id, type: "fat",     title: "Grasas",    items: fatItems.filter(Boolean) },
+      ],
+    });
+
+    const newMeals = [
+      mkMeal("m1", "Comida 1", "Desayuno", "08:00",
+        [mkItem("Claras de huevo", 200), mkItem("Huevos enteros", 100)],
+        [mkItem("Avena", 50), mkItem("Pan", 60)],
+        [mkItem("Crema cacahuete", 15), mkItem("Aguacate", 50)]
+      ),
+      mkMeal("m2", "Comida 2", "Almuerzo", "14:00",
+        [mkItem("Pollo / Pavo", 130), mkItem("Ternera (magra)", 120)],
+        [mkItem("Arroz (seco)", 70), mkItem("Pasta (seca)", 65)],
+        [mkItem("AOVE (Aceite)", 10), mkItem("Aguacate", 60)]
+      ),
+      mkMeal("m3", "Comida 3", "Cena", "21:00",
+        [mkItem("Pescado blanco", 180), mkItem("Salmón ahumado", 120)],
+        [mkItem("Patata", 250), mkItem("Boniato", 220)],
+        [mkItem("AOVE (Aceite)", 10), mkItem("Queso Havarti", 25)]
+      ),
+      mkMeal("m4", "Comida Post-Entreno", "Después del entrenamiento", "18:00",
+        [mkItem("Whey Protein", 30), mkItem("Yogur de proteína", 200)],
+        [mkItem("Crema de arroz", 50), mkItem("Corn Flakes 0%", 50)],
+        [mkItem("Frutos secos", 30), mkItem("Chocolate 85%", 20)]
+      ),
+    ];
+
+    setD(p => ({ ...p, name: p.name || "Dieta Base Mujer 1800 kcal", meals: newMeals }));
+    setOpenMeal("m1");
+  };
+
+  // Generate base diet — man 3000 kcal
+  const generateBase3000 = () => {
+    if (d.meals && d.meals.length > 0) {
+      if (!confirm("Esto sustituirá la dieta actual. ¿Continuar?")) return;
+    }
+    const mkMeal = (id, title, subtitle, time, protItems, carbItems, fatItems) => ({
+      id, title, subtitle, time,
+      sections: [
+        { id: "s-p-" + id, type: "protein", title: "Proteínas", items: protItems.filter(Boolean) },
+        { id: "s-c-" + id, type: "carbs",   title: "Hidratos",  items: carbItems.filter(Boolean) },
+        { id: "s-f-" + id, type: "fat",     title: "Grasas",    items: fatItems.filter(Boolean) },
+      ],
+    });
+
+    const newMeals = [
+      mkMeal("m1", "Comida 1", "Desayuno", "08:00",
+        [mkItem("Claras de huevo", 250), mkItem("Huevos enteros", 150)],
+        [mkItem("Avena", 80), mkItem("Pan", 100)],
+        [mkItem("Crema cacahuete", 20), mkItem("Aguacate", 70)]
+      ),
+      mkMeal("m2", "Comida 2", "Almuerzo", "14:00",
+        [mkItem("Pollo / Pavo", 250), mkItem("Ternera (magra)", 230)],
+        [mkItem("Arroz (seco)", 110), mkItem("Pasta (seca)", 100)],
+        [mkItem("AOVE (Aceite)", 12), mkItem("Aguacate", 80)]
+      ),
+      mkMeal("m3", "Comida 3", "Cena", "21:00",
+        [mkItem("Pescado blanco", 300), mkItem("Salmón ahumado", 200)],
+        [mkItem("Patata", 450), mkItem("Boniato", 400)],
+        [mkItem("AOVE (Aceite)", 12), mkItem("Queso Havarti", 35)]
+      ),
+      mkMeal("m4", "Comida Post-Entreno", "Después del entrenamiento", "18:00",
+        [mkItem("Whey Protein", 60), mkItem("Yogur de proteína", 400)],
+        [mkItem("Crema de arroz", 80), mkItem("Corn Flakes 0%", 80)],
+        [mkItem("Frutos secos", 30), mkItem("Chocolate 85%", 25)]
+      ),
+    ];
+
+    setD(p => ({ ...p, name: p.name || "Dieta Base Hombre 3000 kcal", meals: newMeals }));
+    setOpenMeal("m1");
+  };
 
   return (
     <div>
-      {/* Diet header fields */}
+      {/* Diet name */}
       <Field label="NOMBRE DE LA DIETA" value={d.name} onChange={v=>setD(p=>({...p,name:v}))}/>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16}}>
-        {[["Kcal","calories"],["Prot.g","protein"],["Carbs.g","carbs"],["Grasa.g","fat"]].map(([l,k])=>(
-          <div key={k}>
-            <div style={{color:t.textSub,fontSize:10,fontWeight:700,marginBottom:5}}>{l}</div>
-            <input type="number" value={d[k]} onChange={e=>setD(p=>({...p,[k]:+e.target.value}))} style={{...si,width:"100%",boxSizing:"border-box",textAlign:"center"}}/>
-          </div>
-        ))}
+
+      {/* Generate base diet buttons — based on client gender */}
+      <div style={{ marginBottom: 16, display: "grid", gridTemplateColumns: client.gender ? "1fr" : "1fr 1fr", gap: 8 }}>
+        {(!client.gender || client.gender === "female") && (
+          <button onClick={generateBase1800}
+            style={{ background: `linear-gradient(135deg, #e05a8a, #c04070)`, border: "none", borderRadius: 12, padding: "12px 10px", cursor: "pointer", color: "white", fontSize: 13, fontWeight: 800, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxShadow: `0 4px 14px rgba(224,90,138,0.3)`, lineHeight: 1.3 }}>
+            ♀ Dieta Base Mujer · 1800 kcal
+          </button>
+        )}
+        {(!client.gender || client.gender === "male") && (
+          <button onClick={generateBase3000}
+            style={{ background: `linear-gradient(135deg, ${t.accent}, ${t.accentDim})`, border: "none", borderRadius: 12, padding: "12px 10px", cursor: "pointer", color: "white", fontSize: 13, fontWeight: 800, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, boxShadow: `0 4px 14px ${t.accentGlow}`, lineHeight: 1.3 }}>
+            ♂ Dieta Base Hombre · 3000 kcal
+          </button>
+        )}
       </div>
+      {!client.gender && <div style={{ fontSize: 11, color: t.textDim, marginTop: -10, marginBottom: 14, textAlign: "center" }}>⚠️ El cliente no ha indicado su género aún</div>}
+
+      {/* AUTO-CALCULATED TOTALS */}
+      <div style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 4 }}>MACROS TOTALES (Opción A)</div>
+        <div style={{ fontSize: 10, color: t.textDim, marginBottom: 10 }}>Calculados con la primera opción de cada comida</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, textAlign: "center" }}>
+          {[["🔥","Kcal",totals.kcal,""],["💪","Prot",totals.prot,"g"],["🌾","Carbs",totals.carb,"g"],["🥑","Grasas",totals.fat,"g"]].map(([ico,lbl,val,unit]) => (
+            <div key={lbl} style={{ background: t.bgElevated, borderRadius: 10, padding: "10px 4px" }}>
+              <div style={{ fontSize: 16 }}>{ico}</div>
+              <div style={{ fontSize: 17, fontWeight: 900, color: t.text, letterSpacing: "-0.02em" }}>{val}{unit}</div>
+              <div style={{ fontSize: 10, color: t.textSub, fontWeight: 700 }}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <Sep/>
 
       {/* Meals */}
-      {d.meals.map((meal) => {
+      {(d.meals || []).map(meal => {
         const isOpen = openMeal === meal.id;
+        // Calculate meal totals — only first option (A) of each section
+        let mKcal = 0, mProt = 0, mCarb = 0, mFat = 0;
+        meal.sections?.forEach(s => {
+          const firstItem = s.items?.[0];
+          if (firstItem?.macros) {
+            mKcal += +firstItem.macros.kcal || 0;
+            mProt += +firstItem.macros.prot || 0;
+            mCarb += +firstItem.macros.carb || 0;
+            mFat  += +firstItem.macros.fat  || 0;
+          }
+        });
+
         return (
-          <div key={meal.id} style={{border:`1.5px solid ${isOpen?"rgba(13,142,173,0.3)":t.border}`,borderRadius:14,marginBottom:10,overflow:"hidden"}}>
+          <div key={meal.id} style={{ border: `1.5px solid ${isOpen ? "rgba(13,142,173,0.3)" : t.border}`, borderRadius: 14, marginBottom: 10, overflow: "hidden" }}>
             {/* Meal header */}
-            <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 14px",background:isOpen?"rgba(13,142,173,0.06)":"transparent"}}>
-              <button onClick={()=>setOpenMeal(isOpen?null:meal.id)} style={{flex:1,background:"none",border:"none",cursor:"pointer",textAlign:"left",fontFamily:"inherit",display:"flex",alignItems:"center",gap:10}}>
-                <div style={{color:isOpen?t.accent:t.textDim,transition:"transform 0.2s",transform:isOpen?"rotate(180deg)":"none"}}><Icon n="down" s={15}/></div>
-                <span style={{fontSize:14,fontWeight:700,color:t.text}}>{meal.title}</span>
-                <span style={{fontSize:12,color:t.textSub}}>{meal.subtitle}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", background: isOpen ? "rgba(13,142,173,0.06)" : "transparent" }}>
+              <button onClick={() => setOpenMeal(isOpen ? null : meal.id)}
+                style={{ flex: 1, background: "none", border: "none", cursor: "pointer", textAlign: "left", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ color: isOpen ? t.accent : t.textDim, transition: "transform 0.2s", transform: isOpen ? "rotate(180deg)" : "none" }}><Icon n="down" s={15}/></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>{meal.title}</div>
+                  {mKcal > 0 && <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>🔥 {Math.round(mKcal)} kcal · 💪 {mProt.toFixed(0)}g · 🌾 {mCarb.toFixed(0)}g · 🥑 {mFat.toFixed(0)}g</div>}
+                </div>
               </button>
-              <button onClick={()=>rmMeal(meal.id)} style={{background:t.dangerAlpha,border:"none",borderRadius:8,padding:"0 10px",height:32,cursor:"pointer",color:t.danger,display:"flex",alignItems:"center"}}><Icon n="trash" s={13}/></button>
+              <button onClick={() => rmMeal(meal.id)} style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, padding: "0 10px", height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center" }}><Icon n="trash" s={13}/></button>
             </div>
 
             {isOpen && (
-              <div style={{padding:"0 14px 14px"}}>
+              <div style={{ padding: "0 14px 14px" }}>
                 {/* Meal basic fields */}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
                   <div>
-                    <div style={{color:t.textSub,fontSize:10,fontWeight:700,marginBottom:4}}>TÍTULO</div>
-                    <input value={meal.title} onChange={e=>updMeal(meal.id,"title",e.target.value)} style={{...si,width:"100%",boxSizing:"border-box"}}/>
+                    <div style={{ color: t.textSub, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>TÍTULO</div>
+                    <input value={meal.title} onChange={e => updMeal(meal.id, "title", e.target.value)} style={{ ...si, width: "100%", boxSizing: "border-box" }}/>
                   </div>
                   <div>
-                    <div style={{color:t.textSub,fontSize:10,fontWeight:700,marginBottom:4}}>SUBTÍTULO</div>
-                    <input value={meal.subtitle} onChange={e=>updMeal(meal.id,"subtitle",e.target.value)} style={{...si,width:"100%",boxSizing:"border-box"}}/>
+                    <div style={{ color: t.textSub, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>SUBTÍTULO</div>
+                    <input value={meal.subtitle || ""} onChange={e => updMeal(meal.id, "subtitle", e.target.value)} style={{ ...si, width: "100%", boxSizing: "border-box" }}/>
                   </div>
                   <div>
-                    <div style={{color:t.textSub,fontSize:10,fontWeight:700,marginBottom:4}}>HORA</div>
-                    <input value={meal.time} onChange={e=>updMeal(meal.id,"time",e.target.value)} placeholder="14:00" style={{...si,width:"100%",boxSizing:"border-box"}}/>
-                  </div>
-                  <div>
-                    <div style={{color:t.textSub,fontSize:10,fontWeight:700,marginBottom:4}}>KCAL</div>
-                    <input type="number" value={meal.kcal} onChange={e=>updMeal(meal.id,"kcal",+e.target.value)} style={{...si,width:"100%",boxSizing:"border-box",textAlign:"center"}}/>
+                    <div style={{ color: t.textSub, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>HORA</div>
+                    <input value={meal.time || ""} onChange={e => updMeal(meal.id, "time", e.target.value)} placeholder="14:00" style={{ ...si, width: "100%", boxSizing: "border-box" }}/>
                   </div>
                 </div>
 
-                {/* Sections */}
-                {meal.sections.map(sec => {
-                  const cfg = SECTION_CONFIG[sec.type] || SECTION_CONFIG.extras;
+                {/* Sections: Protein / Carbs / Fat */}
+                {(meal.sections || []).map(sec => {
+                  const cfg = secConfig[sec.type] || secConfig.protein;
+                  const foodOptions = ALL_FOODS.filter(f => f.cat === cfg.cat);
+                  const letters = ["A","B","C","D","E","F","G","H"];
                   return (
-                    <div key={sec.id} style={{background:`rgba(255,255,255,0.03)`,border:`1px solid ${cfg.border}`,borderRadius:10,padding:10,marginBottom:8}}>
-                      <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
-                        <select value={sec.type} onChange={e=>updSection(meal.id,sec.id,"type",e.target.value)}
-                          style={{...si,flex:1,color:cfg.color,fontWeight:700}}>
-                          {sectionTypes.map(st=><option key={st.value} value={st.value}>{st.label}</option>)}
-                        </select>
-                        <input value={sec.title} onChange={e=>updSection(meal.id,sec.id,"title",e.target.value)} placeholder="Título personalizado"
-                          style={{...si,flex:1}}/>
-                        <button onClick={()=>rmSection(meal.id,sec.id)} style={{background:t.dangerAlpha,border:"none",borderRadius:7,padding:"0 9px",height:30,cursor:"pointer",color:t.danger,display:"flex",alignItems:"center"}}><Icon n="x" s={12}/></button>
-                      </div>
-                      {/* Items */}
-                      {sec.items.map(item=>(
-                        <div key={item.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 1fr 28px",gap:5,marginBottom:6,alignItems:"center"}}>
-                          <input value={item.emoji||""} onChange={e=>updItem(meal.id,sec.id,item.id,"emoji",e.target.value)} placeholder="🍽️"
-                            style={{...si,textAlign:"center",fontSize:16,padding:"6px 4px"}}/>
-                          <input value={item.name} onChange={e=>updItem(meal.id,sec.id,item.id,"name",e.target.value)} placeholder="Alimento"
-                            style={si}/>
-                          <input value={item.amount} onChange={e=>updItem(meal.id,sec.id,item.id,"amount",e.target.value)} placeholder="Cantidad"
-                            style={si}/>
-                          <button onClick={()=>rmItem(meal.id,sec.id,item.id)} style={{background:"none",border:"none",cursor:"pointer",color:t.textDim,display:"flex",justifyContent:"center"}}><Icon n="x" s={13}/></button>
+                    <div key={sec.id} style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${cfg.border}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: cfg.color, marginBottom: 8 }}>{cfg.label}</div>
+
+                      {/* Existing options */}
+                      {(sec.items || []).map((item, idx) => (
+                        <div key={item.id} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                            <div style={{ background: cfg.color, color: "white", borderRadius: 8, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900, flexShrink: 0 }}>{letters[idx] || "?"}</div>
+                            <span style={{ fontSize: 16 }}>{item.emoji || "🍽️"}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, color: t.text, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                Opción {letters[idx] || "?"}: {item.name}
+                              </div>
+                              {item.macros && (
+                                <div style={{ fontSize: 10, color: t.textDim, fontWeight: 500, marginTop: 2 }}>
+                                  {item.macros.kcal} kcal · {item.macros.prot}P · {item.macros.carb}C · {item.macros.fat}G
+                                </div>
+                              )}
+                            </div>
+                            <button onClick={() => rmItem(meal.id, sec.id, item.id)}
+                              style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 28, height: 28, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              <Icon n="x" s={13}/>
+                            </button>
+                          </div>
+                          {/* Grams +/- stepper */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
+                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) - 10))}
+                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              −
+                            </button>
+                            <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
+                              <div style={{ fontSize: 16, fontWeight: 900, color: cfg.color, letterSpacing: "-0.02em" }}>{item.grams || 100}<span style={{ fontSize: 11, color: t.textSub, fontWeight: 700, marginLeft: 2 }}>g</span></div>
+                            </div>
+                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, (item.grams || 100) + 10)}
+                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              +
+                            </button>
+                          </div>
                         </div>
                       ))}
-                      <Btn onClick={()=>addItem(meal.id,sec.id)} variant="text" size="sm"><Icon n="plus" s={12}/> Alimento</Btn>
+
+                      {/* Add new option */}
+                      <FoodSelector foods={foodOptions} onAdd={(food, grams) => addFoodItem(meal.id, sec.id, food, grams)} accentColor={cfg.color} nextLetter={letters[sec.items?.length || 0] || "?"}/>
                     </div>
                   );
                 })}
-                <Btn onClick={()=>addSection(meal.id)} variant="ghost" size="sm" style={{marginTop:4}}><Icon n="plus" s={13}/> Categoría</Btn>
               </div>
             )}
           </div>
         );
       })}
 
-      <div style={{display:"flex",gap:10,marginTop:6}}>
+      <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
         <Btn onClick={addMeal} variant="ghost" size="sm"><Icon n="plus" s={14}/> Comida</Btn>
         <SaveBtn onSave={save} saved={saved}/>
       </div>
+    </div>
+  );
+};
+
+// ─── FoodSelector — picks a food from a filtered list + grams ────────────────
+const FoodSelector = ({ foods, onAdd, accentColor, nextLetter }) => {
+  const [selectedName, setSelectedName] = useState("");
+  const [grams, setGrams] = useState(100);
+
+  const handleAdd = () => {
+    const food = foods.find(f => f.name === selectedName);
+    if (!food || !grams) return;
+    onAdd(food, grams);
+    setSelectedName(""); setGrams(100);
+  };
+
+  const si = { background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "10px 12px", color: t.text, fontSize: 13, fontFamily: "inherit", outline: "none" };
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: `1.5px dashed ${t.border}`, borderRadius: 10, padding: 10, marginTop: 4 }}>
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.04em", marginBottom: 8 }}>+ AÑADIR OPCIÓN {nextLetter}</div>
+      <select value={selectedName} onChange={e => setSelectedName(e.target.value)}
+        style={{ ...si, width: "100%", boxSizing: "border-box", marginBottom: 8, color: selectedName ? t.text : t.textDim }}>
+        <option value="">Elige un alimento...</option>
+        {foods.map(f => <option key={f.name} value={f.name}>{f.emoji} {f.name}</option>)}
+      </select>
+      {selectedName && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginBottom: 8 }}>
+            <button onClick={() => setGrams(g => Math.max(0, (+g) - 10))}
+              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>
+              −
+            </button>
+            <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
+              <div style={{ fontSize: 16, fontWeight: 900, color: accentColor, letterSpacing: "-0.02em" }}>{grams}<span style={{ fontSize: 11, color: t.textSub, fontWeight: 700, marginLeft: 2 }}>g</span></div>
+            </div>
+            <button onClick={() => setGrams(g => (+g) + 10)}
+              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>
+              +
+            </button>
+          </div>
+          <button onClick={handleAdd}
+            style={{ width: "100%", background: accentColor, border: "none", borderRadius: 8, padding: "10px", cursor: "pointer", color: "white", fontSize: 13, fontWeight: 800, fontFamily: "inherit" }}>
+            ✓ Añadir Opción {nextLetter}
+          </button>
+        </>
+      )}
     </div>
   );
 };
@@ -2673,7 +3257,7 @@ const ANewClient = ({ db, setDb, onDone }) => {
 };
 
 const ClientOnboarding = ({ client, db, setDb, onDone }) => {
-  const [f, setF] = useState({ phone: client.phone||"", age: client.age||"", height: client.height||"", goal: client.goal||"", personalNotes: client.personalNotes||"", injuries: client.injuries||"Sin lesiones actuales." });
+  const [f, setF] = useState({ phone: client.phone||"", age: client.age||"", height: client.height||"", gender: client.gender||"", goal: client.goal||"", personalNotes: client.personalNotes||"", injuries: client.injuries||"Sin lesiones actuales." });
   const [newPass, setNewPass] = useState("");
   const [newPass2, setNewPass2] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2681,6 +3265,7 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
   const fld = k => ({ value: f[k], onChange: v => setF(p=>({...p,[k]:v})) });
 
   const save = async () => {
+    if (!f.gender) return alert("Por favor indica si eres hombre o mujer");
     if (!f.goal) return alert("Por favor indica tu objetivo");
     if (newPass && newPass !== newPass2) { setPassErr("Las contraseñas no coinciden"); return; }
     if (newPass && newPass.length < 6) { setPassErr("Mínimo 6 caracteres"); return; }
@@ -2697,6 +3282,7 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
     await sb.upsert("clients", {
       id: client.id, user_id: client.userId, name: client.name, email: client.email,
       phone: f.phone || null, age: +f.age || null, height_cm: +f.height || null,
+      gender: f.gender,
       goal: f.goal, personal_notes: f.personalNotes || null, injuries: f.injuries || null,
       status: "active", start_date: client.startDate, avatar: client.avatar,
       password: finalPassword,
@@ -2720,6 +3306,21 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
       <div style={{ padding: "0 16px" }}>
         <Card accent style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 16 }}>TUS DATOS</div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>GÉNERO *</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={() => setF(p => ({ ...p, gender: "male" }))}
+                style={{ flex: 1, background: f.gender === "male" ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${f.gender === "male" ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "14px 10px", cursor: "pointer", color: f.gender === "male" ? t.accent : t.textSub, fontSize: 14, fontWeight: 700, fontFamily: "inherit" }}>
+                ♂ Hombre
+              </button>
+              <button type="button" onClick={() => setF(p => ({ ...p, gender: "female" }))}
+                style={{ flex: 1, background: f.gender === "female" ? "rgba(224,90,138,0.15)" : t.bgElevated, border: `1.5px solid ${f.gender === "female" ? "rgba(224,90,138,0.4)" : t.border}`, borderRadius: 10, padding: "14px 10px", cursor: "pointer", color: f.gender === "female" ? "#e05a8a" : t.textSub, fontSize: 14, fontWeight: 700, fontFamily: "inherit" }}>
+                ♀ Mujer
+              </button>
+            </div>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
             <Field label="TELÉFONO" {...fld("phone")}/>
             <Field label="EDAD" {...fld("age")} type="number"/>
@@ -3540,6 +4141,14 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [appReady, setAppReady] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [customFoods, setCustomFoods] = useState([]);
+
+  const loadCustomFoods = useCallback(async () => {
+    try {
+      const rows = await sb.select("custom_foods", "?order=name");
+      if (rows) setCustomFoods(rows);
+    } catch {}
+  }, []);
 
   const loadFromSupabase = useCallback(async () => {
     setSyncing(true);
@@ -3553,12 +4162,13 @@ export default function App() {
         sb.select("checkins", "?select=*&order=week_number.desc"),
       ]);
       setDb(prev => mergeSupabaseIntoDb(prev, { clients, weights, notes, clientData, checkins }));
+      await loadCustomFoods();
     } catch (e) {
       console.error("Supabase load error:", e);
       setLoadError(true);
     }
     setSyncing(false);
-  }, []);
+  }, [loadCustomFoods]);
 
   // Initial load on mount
   useEffect(() => {
@@ -3631,7 +4241,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase }}>
+      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods }}>
         <GlobalStyles/>
         {!currentUser
           ? <Login/>
