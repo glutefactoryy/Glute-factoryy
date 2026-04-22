@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.4.3";
+const APP_VERSION = "5.4.4";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -805,6 +805,18 @@ const ClientApp = () => {
         <Icon n="back" s={16}/> Volver
       </button>
       <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 20 }}>Mis ajustes</div>
+
+      {/* Open/edit questionnaire — always available */}
+      <button onClick={() => { setShowSettings(false); setShowQuestionnaire(true); }}
+        style={{ width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", marginBottom: 12 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 11, background: "rgba(240,160,48,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📋</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>{hasQuestionnaire ? "Editar cuestionario" : "Rellenar cuestionario inicial"}</div>
+          <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{hasQuestionnaire ? "Actualiza tus respuestas" : "Pendiente de rellenar"}</div>
+        </div>
+        <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+      </button>
+
       <ClientPasswordChange client={client} db={db} setDb={setDb} onDone={() => setShowSettings(false)}/>
     </div>
   );
@@ -2601,20 +2613,15 @@ const ADetail = ({ client, db, setDb, onDel }) => {
 const AQuestionnaireTab = ({ client }) => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
-  const [debugInfo, setDebugInfo] = useState("");
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
-        console.log("[AQuestionnaireTab] Fetching for client.id:", client.id);
         const rows = await sb.select("client_questionnaires", `?client_id=eq.${client.id}`);
-        console.log("[AQuestionnaireTab] Received:", rows);
-        setDebugInfo(`Client ID: ${client.id} — Respuestas recibidas: ${JSON.stringify(rows)}`);
         if (rows && rows.length > 0) setData(rows[0]);
       } catch (e) {
         console.error("[AQuestionnaireTab] Error:", e);
-        setDebugInfo(`Error: ${e.message}`);
       }
       setLoading(false);
     })();
@@ -2623,13 +2630,7 @@ const AQuestionnaireTab = ({ client }) => {
   if (loading) return <div style={{ textAlign: "center", color: t.textSub, padding: 40, animation: "pulse 1.5s infinite" }}>Cargando...</div>;
 
   if (!data) return (
-    <div>
-      <Empty icon="notes" text="El cliente aún no ha rellenado el cuestionario inicial"/>
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, marginTop: 16, fontSize: 11, color: t.textSub, fontFamily: "monospace", wordBreak: "break-all" }}>
-        <div style={{ fontWeight: 700, marginBottom: 6 }}>🔍 DEBUG INFO:</div>
-        {debugInfo}
-      </div>
-    </div>
+    <Empty icon="notes" text="El cliente aún no ha rellenado el cuestionario inicial"/>
   );
 
   const a = data.answers || {};
@@ -2657,11 +2658,28 @@ const AQuestionnaireTab = ({ client }) => {
 
   const completedAt = data.completed_at ? new Date(data.completed_at).toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" }) : "";
 
+  const resetQuestionnaire = async () => {
+    if (!confirm(`¿Eliminar el cuestionario de ${client.name}? El cliente podrá rellenarlo de nuevo desde su app.`)) return;
+    try {
+      await sb.remove("client_questionnaires", "client_id", client.id);
+      setData(null);
+      alert("Cuestionario eliminado. El cliente verá el banner para rellenarlo de nuevo.");
+    } catch (e) {
+      alert("Error al eliminar: " + e.message);
+    }
+  };
+
   return (
     <div>
-      <div style={{ background: "linear-gradient(135deg, rgba(240,160,48,0.12), rgba(240,160,48,0.04))", border: "1.5px solid rgba(240,160,48,0.3)", borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 4 }}>📋 Cuestionario completado</div>
-        <div style={{ fontSize: 12, color: t.textSub }}>Rellenado el {completedAt}</div>
+      <div style={{ background: "linear-gradient(135deg, rgba(240,160,48,0.12), rgba(240,160,48,0.04))", border: "1.5px solid rgba(240,160,48,0.3)", borderRadius: 14, padding: "14px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 4 }}>📋 Cuestionario completado</div>
+          <div style={{ fontSize: 12, color: t.textSub }}>Rellenado el {completedAt}</div>
+        </div>
+        <button onClick={resetQuestionnaire}
+          style={{ background: t.dangerAlpha, border: `1px solid rgba(224,90,90,0.3)`, borderRadius: 10, padding: "8px 12px", cursor: "pointer", color: t.danger, fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+          🔄 Reset
+        </button>
       </div>
 
       <Section title="Objetivos" icon="🎯">
@@ -4030,12 +4048,63 @@ const QTI = ({ value, onChange, placeholder, type = "text" }) => (
 );
 
 const ClientQuestionnaire = ({ client, onDone, onBack }) => {
-  const [step, setStep] = useState(0);
+  const storageKey = `gf_questionnaire_${client.id}`;
+
+  // Restore saved progress if any
+  const loadSaved = () => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        return { step: saved.step || 0, a: saved.a || {} };
+      }
+    } catch {}
+    return { step: 0, a: {} };
+  };
+  const initial = loadSaved();
+
+  const [step, setStep] = useState(initial.step);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
-  const [a, setA] = useState({}); // all answers
+  const [a, setA] = useState(initial.a);
+  const [showRestoreMsg, setShowRestoreMsg] = useState(initial.step > 0 || Object.keys(initial.a).length > 0);
+  const [busy, setBusy] = useState(false); // prevent double-click
+  const [loadingRemote, setLoadingRemote] = useState(true);
 
   const set = (k, v) => setA(p => ({ ...p, [k]: v }));
+
+  // Fetch existing answers from Supabase on mount — if exists, merge with local
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sb.select("client_questionnaires", `?client_id=eq.${client.id}`);
+        if (rows && rows.length > 0 && rows[0].answers) {
+          const remoteAnswers = rows[0].answers;
+          // Only use remote if local is empty (else keep local progress)
+          if (Object.keys(initial.a).length === 0) {
+            setA(remoteAnswers);
+            setShowRestoreMsg(true);
+          }
+        }
+      } catch {}
+      setLoadingRemote(false);
+    })();
+  }, [client.id]);
+
+  // Auto-save to localStorage on every change
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ step, a }));
+    } catch {}
+  }, [step, a]);
+
+  // Anti double-click helper
+  const guardedSet = (k, v) => {
+    if (busy) return;
+    setBusy(true);
+    set(k, v);
+    setTimeout(() => setBusy(false), 300);
+  };
 
   const sections = [
     // Section 1 — Objetivos
@@ -4205,10 +4274,12 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
   const progress = ((step + 1) / totalSteps) * 100;
 
   const next = () => {
+    if (busy || saving) return; // prevent double-click
     if (!current.validate()) {
       setErr("Por favor responde todas las preguntas de esta sección");
       return;
     }
+    setBusy(true);
     setErr("");
     if (step < totalSteps - 1) {
       setStep(s => s + 1);
@@ -4216,20 +4287,27 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
     } else {
       submit();
     }
+    setTimeout(() => setBusy(false), 400);
   };
 
   const prev = () => {
+    if (busy || saving) return;
+    setBusy(true);
     setErr("");
     if (step > 0) setStep(s => s - 1);
+    setTimeout(() => setBusy(false), 400);
   };
 
   const submit = async () => {
+    if (saving) return; // prevent double submission
     setSaving(true);
     try {
-      await sb.insert("client_questionnaires", {
+      // Use upsert on client_id to handle case of re-submitting
+      await sb.upsert("client_questionnaires", {
         client_id: client.id,
         answers: a,
-      });
+        completed_at: new Date().toISOString(),
+      }, "client_id");
       // Notify all admins
       const admins = await sb.select("admins", "?select=id");
       for (const admin of admins || []) {
@@ -4240,6 +4318,8 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
           link_type: "client", link_id: client.id, read: false,
         });
       }
+      // Clear localStorage after successful save
+      try { localStorage.removeItem(storageKey); } catch {}
       onDone();
     } catch (e) {
       setErr("Error al guardar. Inténtalo de nuevo.");
@@ -4252,7 +4332,7 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       {/* Header */}
       <div style={{ padding: "52px 20px 20px", background: `linear-gradient(180deg, rgba(240,160,48,0.08) 0%, transparent 100%)`, borderBottom: `1px solid ${t.border}` }}>
         <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:14, padding:0 }}>
-          <Icon n="back" s={16}/> Salir (se perderá lo rellenado)
+          <Icon n="back" s={16}/> Salir (se guarda automáticamente)
         </button>
         <div style={{ fontSize: 22, fontWeight: 900, color: t.text, letterSpacing: "-0.02em", marginBottom: 4 }}>📋 Cuestionario inicial</div>
         <div style={{ fontSize: 13, color: t.textSub, marginBottom: 16 }}>Sección {step + 1} de {totalSteps} · {current.icon} {current.title}</div>
@@ -4263,6 +4343,19 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
 
       {/* Questions */}
       <div style={{ flex: 1, padding: "20px 20px 16px", overflowY: "auto" }}>
+        {showRestoreMsg && (
+          <div style={{ background: "linear-gradient(135deg, rgba(30,155,191,0.12), rgba(30,155,191,0.04))", border: "1.5px solid rgba(30,155,191,0.3)", borderRadius: 12, padding: "12px 14px", marginBottom: 16, display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <span style={{ fontSize: 18, flexShrink: 0 }}>💾</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: t.text, marginBottom: 2 }}>Continuando donde lo dejaste</div>
+              <div style={{ fontSize: 11, color: t.textSub, lineHeight: 1.4 }}>Tus respuestas anteriores están cargadas. Puedes revisarlas o modificarlas.</div>
+            </div>
+            <button onClick={() => setShowRestoreMsg(false)}
+              style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: t.textSub, fontSize: 10, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+              OK
+            </button>
+          </div>
+        )}
         {current.render()}
         {err && <div style={{ color: t.danger, fontSize: 13, fontWeight: 600, marginBottom: 14, background: t.dangerAlpha, padding: "10px 14px", borderRadius: 10, border: `1px solid rgba(230,80,80,0.3)` }}>⚠️ {err}</div>}
       </div>
