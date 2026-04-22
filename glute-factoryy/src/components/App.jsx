@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.4.4";
+const APP_VERSION = "5.4.5";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -22,6 +22,20 @@ const fetchWithTimeout = (url, options = {}, ms = 25000) => {
     .finally(() => clearTimeout(timer));
 };
 
+// Dedup map: prevents identical writes within 800ms (protects against double-click submissions)
+const _sbRecent = new Map();
+const _sbDedup = (key, ttl = 800) => {
+  const now = Date.now();
+  const last = _sbRecent.get(key);
+  if (last && now - last < ttl) return true; // skip duplicate
+  _sbRecent.set(key, now);
+  // Clean old entries (keep map small)
+  if (_sbRecent.size > 100) {
+    for (const [k, ts] of _sbRecent) if (now - ts > 5000) _sbRecent.delete(k);
+  }
+  return false;
+};
+
 const sb = {
   async select(table, q = "") {
     try {
@@ -32,6 +46,8 @@ const sb = {
   },
   async upsert(table, data, onConflict = "") {
     try {
+      const key = `upsert:${table}:${onConflict}:${JSON.stringify(data)}`;
+      if (_sbDedup(key)) { console.log("[sb] skipped duplicate upsert:", table); return null; }
       const qs = onConflict ? `?on_conflict=${onConflict}` : "";
       const r = await fetchWithTimeout(`${SB_URL}/rest/v1/${table}${qs}`, {
         method: "POST",
@@ -48,6 +64,8 @@ const sb = {
   },
   async insert(table, data) {
     try {
+      const key = `insert:${table}:${JSON.stringify(data)}`;
+      if (_sbDedup(key)) { console.log("[sb] skipped duplicate insert:", table); return null; }
       const r = await fetchWithTimeout(`${SB_URL}/rest/v1/${table}`, {
         method: "POST",
         headers: { ...SB_H, "Prefer": "return=representation" },
@@ -59,6 +77,8 @@ const sb = {
   },
   async remove(table, col, val) {
     try {
+      const key = `remove:${table}:${col}:${val}`;
+      if (_sbDedup(key)) { console.log("[sb] skipped duplicate remove:", table); return; }
       await fetchWithTimeout(`${SB_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`, {
         method: "DELETE", headers: SB_H,
       });
@@ -427,7 +447,33 @@ const Field = ({ label, value, onChange, type = "text", placeholder = "", multil
 };
 
 // ─── BUTTON ───────────────────────────────────────────────────────────────────
-const Btn = ({ children, onClick, variant = "primary", size = "md", disabled, full, style: sx = {} }) => {
+// Global last-click timestamp to prevent rapid duplicate clicks across the app
+let _lastClickTs = 0;
+const guardClick = (fn, cooldownMs = 400) => {
+  return (...args) => {
+    const now = Date.now();
+    if (now - _lastClickTs < cooldownMs) return;
+    _lastClickTs = now;
+    return fn?.(...args);
+  };
+};
+
+// GuardBtn — native button wrapper with built-in double-click protection
+// Use this instead of raw <button> for any destructive/expensive action.
+const GuardBtn = ({ onClick, children, cooldown = 600, allowRapid = false, ...rest }) => {
+  const [locked, setLocked] = useState(false);
+  const isDisabled = rest.disabled || locked;
+  const handle = async (e) => {
+    if (isDisabled || !onClick) return;
+    if (allowRapid) { onClick(e); return; }
+    setLocked(true);
+    try { await onClick(e); } finally { setTimeout(() => setLocked(false), cooldown); }
+  };
+  return <button {...rest} onClick={handle} disabled={isDisabled}>{children}</button>;
+};
+
+const Btn = ({ children, onClick, variant = "primary", size = "md", disabled, full, style: sx = {}, allowRapid = false }) => {
+  const [locked, setLocked] = useState(false);
   const vs = {
     primary: { bg: `linear-gradient(135deg, ${t.accent} 0%, ${t.accentDim} 100%)`, color: "#fff", bd: "none", shadow: `0 4px 16px ${t.accentGlow}` },
     ghost:   { bg: t.bgElevated, color: t.text, bd: `1.5px solid ${t.borderMid}`, shadow: "none" },
@@ -436,12 +482,19 @@ const Btn = ({ children, onClick, variant = "primary", size = "md", disabled, fu
   };
   const ss = { sm: { p: "8px 16px", fs: 13 }, md: { p: "13px 22px", fs: 15 }, lg: { p: "16px 28px", fs: 16 } };
   const v = vs[variant], s = ss[size];
+  const isDisabled = disabled || locked;
+  const handleClick = async (e) => {
+    if (isDisabled || !onClick) return;
+    if (allowRapid) { onClick(e); return; }
+    setLocked(true);
+    try { await onClick(e); } finally { setTimeout(() => setLocked(false), 600); }
+  };
   return (
-    <button onClick={onClick} disabled={disabled} style={{ background: v.bg, color: v.color, border: v.bd, boxShadow: v.shadow, padding: s.p, fontSize: s.fs, fontWeight: 700, borderRadius: 12, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "transform 0.1s, opacity 0.15s", width: full ? "100%" : undefined, letterSpacing: "0.01em", ...sx }}
-      onMouseDown={e => { if (!disabled) e.currentTarget.style.transform = "scale(0.97)"; }}
-      onMouseUp={e => { if (!disabled) e.currentTarget.style.transform = "scale(1)"; }}
-      onTouchStart={e => { if (!disabled) e.currentTarget.style.transform = "scale(0.97)"; }}
-      onTouchEnd={e => { if (!disabled) e.currentTarget.style.transform = "scale(1)"; }}
+    <button onClick={handleClick} disabled={isDisabled} style={{ background: v.bg, color: v.color, border: v.bd, boxShadow: v.shadow, padding: s.p, fontSize: s.fs, fontWeight: 700, borderRadius: 12, cursor: isDisabled ? "not-allowed" : "pointer", opacity: isDisabled ? 0.45 : 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "transform 0.1s, opacity 0.15s", width: full ? "100%" : undefined, letterSpacing: "0.01em", ...sx }}
+      onMouseDown={e => { if (!isDisabled) e.currentTarget.style.transform = "scale(0.97)"; }}
+      onMouseUp={e => { if (!isDisabled) e.currentTarget.style.transform = "scale(1)"; }}
+      onTouchStart={e => { if (!isDisabled) e.currentTarget.style.transform = "scale(0.97)"; }}
+      onTouchEnd={e => { if (!isDisabled) e.currentTarget.style.transform = "scale(1)"; }}
     >
       {children}
     </button>
@@ -450,7 +503,7 @@ const Btn = ({ children, onClick, variant = "primary", size = "md", disabled, fu
 
 // ─── CARD ─────────────────────────────────────────────────────────────────────
 const Card = ({ children, onClick, style: sx = {}, accent }) => (
-  <div onClick={onClick} style={{
+  <div onClick={onClick ? guardClick(onClick, 400) : undefined} style={{
     background: accent
       ? `linear-gradient(135deg, rgba(30,155,191,0.1) 0%, ${t.bgCard} 60%)`
       : `linear-gradient(135deg, ${t.bgCard} 0%, #080f1c 100%)`,
