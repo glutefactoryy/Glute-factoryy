@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.4.1";
+const APP_VERSION = "5.4.2";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -3981,6 +3981,41 @@ const ANewClient = ({ db, setDb, onDone }) => {
 };
 
 // ─── ClientQuestionnaire — initial complex questionnaire (9 sections) ────────
+// ─── ClientQuestionnaire helpers (defined OUTSIDE to avoid remount on each keystroke) ───
+const QChipBtn = ({ active, onClick, children, color }) => (
+  <button type="button" onClick={onClick}
+    style={{ background: active ? (color ? `${color}22` : t.accentAlpha) : t.bgElevated, border: `1.5px solid ${active ? (color || "rgba(30,155,191,0.4)") : t.border}`, borderRadius: 10, padding: "10px 14px", cursor: "pointer", color: active ? (color || t.accent) : t.textSub, fontSize: 13, fontWeight: 700, fontFamily: "inherit", flex: 1, minWidth: 0 }}>
+    {children}
+  </button>
+);
+
+const QChips = ({ value, options, onChange, color }) => (
+  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+    {options.map(opt => {
+      const [val, lbl] = Array.isArray(opt) ? opt : [opt, opt];
+      return (
+        <div key={val} style={{ flex: "1 1 calc(50% - 3px)", minWidth: 0 }}>
+          <QChipBtn active={value === val} onClick={() => onChange(val)} color={color}>{lbl}</QChipBtn>
+        </div>
+      );
+    })}
+  </div>
+);
+
+const QQ = ({ children }) => (
+  <div style={{ color: t.text, fontSize: 14, fontWeight: 700, marginBottom: 10, lineHeight: 1.4 }}>{children}</div>
+);
+
+const QTA = ({ value, onChange, placeholder, rows = 3 }) => (
+  <textarea value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows}
+    style={{ width: "100%", boxSizing: "border-box", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", resize: "vertical", marginBottom: 16, lineHeight: 1.5 }}/>
+);
+
+const QTI = ({ value, onChange, placeholder, type = "text" }) => (
+  <input value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
+    style={{ width: "100%", boxSizing: "border-box", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 16 }}/>
+);
+
 const ClientQuestionnaire = ({ client, onDone, onBack }) => {
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -3989,41 +4024,6 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
 
   const set = (k, v) => setA(p => ({ ...p, [k]: v }));
 
-  // Button style for options
-  const ChipBtn = ({ active, onClick, children, color }) => (
-    <button type="button" onClick={onClick}
-      style={{ background: active ? (color ? `${color}22` : t.accentAlpha) : t.bgElevated, border: `1.5px solid ${active ? (color || "rgba(30,155,191,0.4)") : t.border}`, borderRadius: 10, padding: "10px 14px", cursor: "pointer", color: active ? (color || t.accent) : t.textSub, fontSize: 13, fontWeight: 700, fontFamily: "inherit", flex: 1, minWidth: 0 }}>
-      {children}
-    </button>
-  );
-
-  const Chips = ({ value, options, onChange, color }) => (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
-      {options.map(opt => {
-        const [val, lbl] = Array.isArray(opt) ? opt : [opt, opt];
-        return (
-          <div key={val} style={{ flex: "1 1 calc(50% - 3px)", minWidth: 0 }}>
-            <ChipBtn active={value === val} onClick={() => onChange(val)} color={color}>{lbl}</ChipBtn>
-          </div>
-        );
-      })}
-    </div>
-  );
-
-  const Q = ({ children }) => (
-    <div style={{ color: t.text, fontSize: 14, fontWeight: 700, marginBottom: 10, lineHeight: 1.4 }}>{children}</div>
-  );
-
-  const TA = ({ value, onChange, placeholder, rows = 3 }) => (
-    <textarea value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows}
-      style={{ width: "100%", boxSizing: "border-box", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", resize: "vertical", marginBottom: 16, lineHeight: 1.5 }}/>
-  );
-
-  const TI = ({ value, onChange, placeholder, type = "text" }) => (
-    <input value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
-      style={{ width: "100%", boxSizing: "border-box", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 16 }}/>
-  );
-
   const sections = [
     // Section 1 — Objetivos
     {
@@ -4031,10 +4031,10 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.objective && a.deadline,
       render: () => (
         <>
-          <Q>¿Cuál es tu objetivo principal?</Q>
-          <TA value={a.objective} onChange={v => set("objective", v)} placeholder="Ej: Perder grasa, ganar músculo, tonificar, mejorar rendimiento..." rows={2}/>
-          <Q>¿Para cuándo te gustaría conseguirlo?</Q>
-          <Chips value={a.deadline} options={[["1-2m","1-2 meses"],["3-6m","3-6 meses"],["6-12m","6-12 meses"],["+1a","+1 año"]]} onChange={v => set("deadline", v)}/>
+          <QQ>¿Cuál es tu objetivo principal?</QQ>
+          <QTA value={a.objective} onChange={v => set("objective", v)} placeholder="Ej: Perder grasa, ganar músculo, tonificar, mejorar rendimiento..." rows={2}/>
+          <QQ>¿Para cuándo te gustaría conseguirlo?</QQ>
+          <QChips value={a.deadline} options={[["1-2m","1-2 meses"],["3-6m","3-6 meses"],["6-12m","6-12 meses"],["+1a","+1 año"]]} onChange={v => set("deadline", v)}/>
         </>
       ),
     },
@@ -4044,16 +4044,16 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.wakeUp && a.bedTime && a.sleepHours && a.mealsPerDay && a.mealTimes,
       render: () => (
         <>
-          <Q>¿A qué hora te despiertas normalmente?</Q>
-          <TI value={a.wakeUp} onChange={v => set("wakeUp", v)} placeholder="Ej: 07:00"/>
-          <Q>¿A qué hora te acuestas normalmente?</Q>
-          <TI value={a.bedTime} onChange={v => set("bedTime", v)} placeholder="Ej: 23:30"/>
-          <Q>¿Cuántas horas duermes normalmente?</Q>
-          <Chips value={a.sleepHours} options={[["<5","menos 5h"],["5-6","5-6h"],["6-7","6-7h"],["7-8","7-8h"],["8+","más 8h"]]} onChange={v => set("sleepHours", v)}/>
-          <Q>¿Cuántas comidas haces al día actualmente?</Q>
-          <Chips value={a.mealsPerDay} options={["2","3","4","5","6+"]} onChange={v => set("mealsPerDay", v)}/>
-          <Q>¿A qué horas sueles comer?</Q>
-          <TA value={a.mealTimes} onChange={v => set("mealTimes", v)} placeholder="Ej: 8:00 desayuno, 11:00 snack, 14:00 comida, 17:00 merienda, 21:00 cena" rows={2}/>
+          <QQ>¿A qué hora te despiertas normalmente?</QQ>
+          <QTI value={a.wakeUp} onChange={v => set("wakeUp", v)} placeholder="Ej: 07:00"/>
+          <QQ>¿A qué hora te acuestas normalmente?</QQ>
+          <QTI value={a.bedTime} onChange={v => set("bedTime", v)} placeholder="Ej: 23:30"/>
+          <QQ>¿Cuántas horas duermes normalmente?</QQ>
+          <QChips value={a.sleepHours} options={[["<5","menos 5h"],["5-6","5-6h"],["6-7","6-7h"],["7-8","7-8h"],["8+","más 8h"]]} onChange={v => set("sleepHours", v)}/>
+          <QQ>¿Cuántas comidas haces al día actualmente?</QQ>
+          <QChips value={a.mealsPerDay} options={["2","3","4","5","6+"]} onChange={v => set("mealsPerDay", v)}/>
+          <QQ>¿A qué horas sueles comer?</QQ>
+          <QTA value={a.mealTimes} onChange={v => set("mealTimes", v)} placeholder="Ej: 8:00 desayuno, 11:00 snack, 14:00 comida, 17:00 merienda, 21:00 cena" rows={2}/>
         </>
       ),
     },
@@ -4063,19 +4063,19 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.trainingNow && (a.trainingNow === "no" || (a.trainingDays && a.trainingType)) && a.steps,
       render: () => (
         <>
-          <Q>¿Entrenas actualmente?</Q>
-          <Chips value={a.trainingNow} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("trainingNow", v)}/>
+          <QQ>¿Entrenas actualmente?</QQ>
+          <QChips value={a.trainingNow} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("trainingNow", v)}/>
           {a.trainingNow === "si" && (
             <>
-              <Q>¿Cuántos días a la semana entrenas?</Q>
-              <Chips value={a.trainingDays} options={["1","2","3","4","5","6","7"]} onChange={v => set("trainingDays", v)}/>
-              <Q>¿Qué tipo de entrenamiento haces?</Q>
-              <Chips value={a.trainingType} options={[["fuerza","Fuerza"],["cardio","Cardio"],["hiit","HIIT"],["mixto","Mixto"],["otros","Otros"]]} onChange={v => set("trainingType", v)}/>
-              {a.trainingType === "otros" && <TI value={a.trainingTypeOther} onChange={v => set("trainingTypeOther", v)} placeholder="Especifica..."/>}
+              <QQ>¿Cuántos días a la semana entrenas?</QQ>
+              <QChips value={a.trainingDays} options={["1","2","3","4","5","6","7"]} onChange={v => set("trainingDays", v)}/>
+              <QQ>¿Qué tipo de entrenamiento haces?</QQ>
+              <QChips value={a.trainingType} options={[["fuerza","Fuerza"],["cardio","Cardio"],["hiit","HIIT"],["mixto","Mixto"],["otros","Otros"]]} onChange={v => set("trainingType", v)}/>
+              {a.trainingType === "otros" && <QTI value={a.trainingTypeOther} onChange={v => set("trainingTypeOther", v)} placeholder="Especifica..."/>}
             </>
           )}
-          <Q>¿Cuántos pasos haces al día aproximadamente?</Q>
-          <Chips value={a.steps} options={[["<5k","menos 5.000"],["5-8k","5.000-8.000"],["8-10k","8.000-10.000"],["10k+","más 10.000"]]} onChange={v => set("steps", v)}/>
+          <QQ>¿Cuántos pasos haces al día aproximadamente?</QQ>
+          <QChips value={a.steps} options={[["<5k","menos 5.000"],["5-8k","5.000-8.000"],["8-10k","8.000-10.000"],["10k+","más 10.000"]]} onChange={v => set("steps", v)}/>
         </>
       ),
     },
@@ -4085,14 +4085,14 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.typicalDay && a.snacking && (a.snacking === "no" || a.snackingWhat),
       render: () => (
         <>
-          <Q>Describe todo lo que comes en un día normal</Q>
-          <TA value={a.typicalDay} onChange={v => set("typicalDay", v)} placeholder="Ej: Desayuno: café con leche y tostada. Comida: pasta con pollo. Cena: ensalada..." rows={5}/>
-          <Q>¿Sueles picar entre horas?</Q>
-          <Chips value={a.snacking} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("snacking", v)}/>
+          <QQ>Describe todo lo que comes en un día normal</QQ>
+          <QTA value={a.typicalDay} onChange={v => set("typicalDay", v)} placeholder="Ej: Desayuno: café con leche y tostada. Comida: pasta con pollo. Cena: ensalada..." rows={5}/>
+          <QQ>¿Sueles picar entre horas?</QQ>
+          <QChips value={a.snacking} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("snacking", v)}/>
           {a.snacking === "si" && (
             <>
-              <Q>¿Qué sueles comer?</Q>
-              <TA value={a.snackingWhat} onChange={v => set("snackingWhat", v)} placeholder="Ej: galletas, chocolate, fruta, frutos secos..." rows={2}/>
+              <QQ>¿Qué sueles comer?</QQ>
+              <QTA value={a.snackingWhat} onChange={v => set("snackingWhat", v)} placeholder="Ej: galletas, chocolate, fruta, frutos secos..." rows={2}/>
             </>
           )}
         </>
@@ -4104,12 +4104,12 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.foodsLike && a.foodsDislike && a.foodsExclude !== undefined,
       render: () => (
         <>
-          <Q>¿Qué alimentos te gustan mucho?</Q>
-          <TA value={a.foodsLike} onChange={v => set("foodsLike", v)} placeholder="Ej: pollo, arroz, aguacate..."/>
-          <Q>¿Qué alimentos NO te gustan?</Q>
-          <TA value={a.foodsDislike} onChange={v => set("foodsDislike", v)} placeholder="Ej: pescado, setas..."/>
-          <Q>¿Hay alimentos que no quieras incluir por ningún motivo?</Q>
-          <TA value={a.foodsExclude} onChange={v => set("foodsExclude", v)} placeholder="Ej: por religión, por ética, por digestión... Si no hay, escribe: ninguno"/>
+          <QQ>¿Qué alimentos te gustan mucho?</QQ>
+          <QTA value={a.foodsLike} onChange={v => set("foodsLike", v)} placeholder="Ej: pollo, arroz, aguacate..."/>
+          <QQ>¿Qué alimentos NO te gustan?</QQ>
+          <QTA value={a.foodsDislike} onChange={v => set("foodsDislike", v)} placeholder="Ej: pescado, setas..."/>
+          <QQ>¿Hay alimentos que no quieras incluir por ningún motivo?</QQ>
+          <QTA value={a.foodsExclude} onChange={v => set("foodsExclude", v)} placeholder="Ej: por religión, por ética, por digestión... Si no hay, escribe: ninguno"/>
         </>
       ),
     },
@@ -4121,17 +4121,17 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
         && a.meds && (a.meds === "no" || a.medsDetails),
       render: () => (
         <>
-          <Q>¿Tienes alguna intolerancia o alergia?</Q>
-          <Chips value={a.allergy} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("allergy", v)}/>
-          {a.allergy === "si" && <TA value={a.allergyDetails} onChange={v => set("allergyDetails", v)} placeholder="Especifica cuáles..." rows={2}/>}
+          <QQ>¿Tienes alguna intolerancia o alergia?</QQ>
+          <QChips value={a.allergy} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("allergy", v)}/>
+          {a.allergy === "si" && <QTA value={a.allergyDetails} onChange={v => set("allergyDetails", v)} placeholder="Especifica cuáles..." rows={2}/>}
 
-          <Q>¿Tienes problemas digestivos (hinchazón, gases, etc.)?</Q>
-          <Chips value={a.digestion} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("digestion", v)}/>
-          {a.digestion === "si" && <TA value={a.digestionDetails} onChange={v => set("digestionDetails", v)} placeholder="Describe los síntomas..." rows={2}/>}
+          <QQ>¿Tienes problemas digestivos (hinchazón, gases, etc.)?</QQ>
+          <QChips value={a.digestion} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("digestion", v)}/>
+          {a.digestion === "si" && <QTA value={a.digestionDetails} onChange={v => set("digestionDetails", v)} placeholder="Describe los síntomas..." rows={2}/>}
 
-          <Q>¿Tomas medicación o tienes alguna patología?</Q>
-          <Chips value={a.meds} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("meds", v)}/>
-          {a.meds === "si" && <TA value={a.medsDetails} onChange={v => set("medsDetails", v)} placeholder="Especifica..." rows={2}/>}
+          <QQ>¿Tomas medicación o tienes alguna patología?</QQ>
+          <QChips value={a.meds} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("meds", v)}/>
+          {a.meds === "si" && <QTA value={a.medsDetails} onChange={v => set("medsDetails", v)} placeholder="Especifica..." rows={2}/>}
         </>
       ),
     },
@@ -4141,12 +4141,12 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.pastDiets && (a.pastDiets === "no" || a.pastDietsDetails),
       render: () => (
         <>
-          <Q>¿Has hecho dietas antes?</Q>
-          <Chips value={a.pastDiets} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("pastDiets", v)}/>
+          <QQ>¿Has hecho dietas antes?</QQ>
+          <QChips value={a.pastDiets} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("pastDiets", v)}/>
           {a.pastDiets === "si" && (
             <>
-              <Q>¿Qué te funcionó y qué no?</Q>
-              <TA value={a.pastDietsDetails} onChange={v => set("pastDietsDetails", v)} placeholder="Cuéntanos tu experiencia..." rows={4}/>
+              <QQ>¿Qué te funcionó y qué no?</QQ>
+              <QTA value={a.pastDietsDetails} onChange={v => set("pastDietsDetails", v)} placeholder="Cuéntanos tu experiencia..." rows={4}/>
             </>
           )}
         </>
@@ -4158,10 +4158,10 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.biggestProblem && a.failSituations,
       render: () => (
         <>
-          <Q>¿Cuál crees que es tu mayor problema con la alimentación?</Q>
-          <TA value={a.biggestProblem} onChange={v => set("biggestProblem", v)} placeholder="Sé sincero/a, esto nos ayuda a ayudarte..." rows={3}/>
-          <Q>¿Qué situaciones te hacen fallar más?</Q>
-          <TA value={a.failSituations} onChange={v => set("failSituations", v)} placeholder="Ej: fines de semana, cenas fuera, estrés, aburrimiento..." rows={3}/>
+          <QQ>¿Cuál crees que es tu mayor problema con la alimentación?</QQ>
+          <QTA value={a.biggestProblem} onChange={v => set("biggestProblem", v)} placeholder="Sé sincero/a, esto nos ayuda a ayudarte..." rows={3}/>
+          <QQ>¿Qué situaciones te hacen fallar más?</QQ>
+          <QTA value={a.failSituations} onChange={v => set("failSituations", v)} placeholder="Ej: fines de semana, cenas fuera, estrés, aburrimiento..." rows={3}/>
         </>
       ),
     },
@@ -4171,7 +4171,7 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       validate: () => a.commitment && a.finalNotes !== undefined,
       render: () => (
         <>
-          <Q>Del 1 al 10, ¿cómo de comprometido/a estás con el proceso?</Q>
+          <QQ>Del 1 al 10, ¿cómo de comprometido/a estás con el proceso?</QQ>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
             {[1,2,3,4,5,6,7,8,9,10].map(n => (
               <button key={n} type="button" onClick={() => set("commitment", String(n))}
@@ -4180,8 +4180,8 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
               </button>
             ))}
           </div>
-          <Q>¿Hay algo importante que deba tener en cuenta para tu planificación?</Q>
-          <TA value={a.finalNotes} onChange={v => set("finalNotes", v)} placeholder="Cualquier detalle útil. Si no, escribe: nada que añadir" rows={3}/>
+          <QQ>¿Hay algo importante que deba tener en cuenta para tu planificación?</QQ>
+          <QTA value={a.finalNotes} onChange={v => set("finalNotes", v)} placeholder="Cualquier detalle útil. Si no, escribe: nada que añadir" rows={3}/>
         </>
       ),
     },
