@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.4.2";
+const APP_VERSION = "5.4.3";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2601,14 +2601,21 @@ const ADetail = ({ client, db, setDb, onDel }) => {
 const AQuestionnaireTab = ({ client }) => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
+  const [debugInfo, setDebugInfo] = useState("");
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
+        console.log("[AQuestionnaireTab] Fetching for client.id:", client.id);
         const rows = await sb.select("client_questionnaires", `?client_id=eq.${client.id}`);
+        console.log("[AQuestionnaireTab] Received:", rows);
+        setDebugInfo(`Client ID: ${client.id} — Respuestas recibidas: ${JSON.stringify(rows)}`);
         if (rows && rows.length > 0) setData(rows[0]);
-      } catch {}
+      } catch (e) {
+        console.error("[AQuestionnaireTab] Error:", e);
+        setDebugInfo(`Error: ${e.message}`);
+      }
       setLoading(false);
     })();
   }, [client.id]);
@@ -2616,7 +2623,13 @@ const AQuestionnaireTab = ({ client }) => {
   if (loading) return <div style={{ textAlign: "center", color: t.textSub, padding: 40, animation: "pulse 1.5s infinite" }}>Cargando...</div>;
 
   if (!data) return (
-    <Empty icon="notes" text="El cliente aún no ha rellenado el cuestionario inicial"/>
+    <div>
+      <Empty icon="notes" text="El cliente aún no ha rellenado el cuestionario inicial"/>
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, marginTop: 16, fontSize: 11, color: t.textSub, fontFamily: "monospace", wordBreak: "break-all" }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>🔍 DEBUG INFO:</div>
+        {debugInfo}
+      </div>
+    </div>
   );
 
   const a = data.answers || {};
