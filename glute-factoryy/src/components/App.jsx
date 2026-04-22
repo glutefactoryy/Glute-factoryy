@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.2";
+const APP_VERSION = "5.4";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -765,7 +765,23 @@ const ClientApp = () => {
   const { currentUser, db, setDb, logout } = useApp();
   const [tab, setTab] = useState("home");
   const [showSettings, setShowSettings] = useState(false);
+  const [showQuestionnaire, setShowQuestionnaire] = useState(false);
+  const [hasQuestionnaire, setHasQuestionnaire] = useState(null); // null = loading
   const client = db.clients.find(c => c.id === currentUser.clientId);
+
+  // Check if questionnaire is filled
+  useEffect(() => {
+    if (!client) return;
+    (async () => {
+      try {
+        const rows = await sb.select("client_questionnaires", `?client_id=eq.${client.id}`);
+        setHasQuestionnaire(rows && rows.length > 0);
+      } catch {
+        setHasQuestionnaire(false);
+      }
+    })();
+  }, [client?.id]);
+
   if (!client) return null;
 
   const weights = db.weightHistory[client.id] || [];
@@ -778,6 +794,9 @@ const ClientApp = () => {
   if (!profileComplete) {
     return <ClientOnboarding client={client} db={db} setDb={setDb} onDone={() => {}} />;
   }
+
+  // Show questionnaire if open
+  if (showQuestionnaire) return <ClientQuestionnaire client={client} onDone={() => { setShowQuestionnaire(false); setHasQuestionnaire(true); }} onBack={() => setShowQuestionnaire(false)}/>;
 
   // Client settings — change password
   if (showSettings) return (
@@ -825,7 +844,7 @@ const ClientApp = () => {
         </div>
 
         <div style={{ padding: "16px 16px 0" }} className="fade-up">
-          {tab === "home"     && <CHome     client={client} weights={weights} notes={notes} db={db} onGoToCheckin={() => setTab("tracking")} />}
+          {tab === "home"     && <CHome     client={client} weights={weights} notes={notes} db={db} onGoToCheckin={() => setTab("tracking")} onGoToQuestionnaire={() => setShowQuestionnaire(true)} hasQuestionnaire={hasQuestionnaire !== false} />}
           {tab === "routine"  && <CRoutine  routine={routine} />}
           {tab === "diet"     && <CDiet     diet={diet} />}
           {tab === "weight"   && <CWeight   client={client} weights={weights} db={db} setDb={setDb} />}
@@ -853,7 +872,7 @@ const ClientApp = () => {
   );
 };
 
-const CHome = ({ client, weights, notes, db, onGoToCheckin }) => {
+const CHome = ({ client, weights, notes, db, onGoToCheckin, onGoToQuestionnaire, hasQuestionnaire }) => {
   const lastW = weights.slice(-1)[0];
   const prevW = weights.slice(-2,-1)[0];
   const diff  = lastW && prevW ? (lastW.weight - prevW.weight).toFixed(1) : null;
@@ -866,6 +885,21 @@ const CHome = ({ client, weights, notes, db, onGoToCheckin }) => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+      {/* Questionnaire reminder — only if NOT completed */}
+      {!hasQuestionnaire && (
+        <div style={{ background: "linear-gradient(135deg, rgba(240,160,48,0.12), rgba(240,160,48,0.04))", border: "1.5px solid rgba(240,160,48,0.3)", borderRadius: 16, padding: "16px 18px", display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <span style={{ fontSize: 26, flexShrink: 0, marginTop: 2 }}>📋</span>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 4 }}>Cuestionario inicial pendiente</div>
+            <div style={{ fontSize: 13, color: t.textSub, lineHeight: 1.5, marginBottom: 12 }}>Rellena este cuestionario para que tu coach pueda personalizar tu plan al máximo. Son solo unos minutos.</div>
+            <button onClick={onGoToQuestionnaire}
+              style={{ background: "linear-gradient(135deg, #f0a030, #c07818)", color: "white", border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 12px rgba(240,160,48,0.3)" }}>
+              Rellenar ahora →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Check-in reminder banner */}
       {!hasCheckin && (
@@ -1086,18 +1120,38 @@ const MealSection = ({ section }) => {
       </div>
       {/* Items */}
       <div>
-        {section.items.map((item, i) => (
-          <div key={item.id || i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < section.items.length - 1 ? `1px solid rgba(255,255,255,0.05)` : "none" }}>
-            <div style={{ width: 36, height: 36, borderRadius: 9, background: "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>
-              {item.emoji || "🍽️"}
+        {section.items.map((item, i) => {
+          const hasComponents = item.components && item.components.length > 1;
+          return (
+            <div key={item.id || i} style={{ padding: "9px 0", borderBottom: i < section.items.length - 1 ? `1px solid rgba(255,255,255,0.05)` : "none" }}>
+              {hasComponents ? (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: cfg.color, letterSpacing: "0.04em", marginBottom: 6 }}>OPCIÓN {String.fromCharCode(65 + i)} · combinación</div>
+                  {item.components.map(comp => (
+                    <div key={comp.id} style={{ display: "flex", alignItems: "center", gap: 10, paddingLeft: 8, marginBottom: 4 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 7, background: "rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>
+                        {comp.emoji || "🍽️"}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: t.text }}>{comp.name}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: cfg.color }}>{comp.grams}g</div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: 9, background: "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>
+                    {item.emoji || "🍽️"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{item.name}</div>
+                    {item.notes && <div style={{ fontSize: 11, color: t.textSub, marginTop: 1 }}>{item.notes}</div>}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: cfg.color, flexShrink: 0 }}>{item.amount}</div>
+                </div>
+              )}
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{item.name}</div>
-              {item.notes && <div style={{ fontSize: 11, color: t.textSub, marginTop: 1 }}>{item.notes}</div>}
-            </div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: cfg.color, flexShrink: 0 }}>{item.amount}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -2494,8 +2548,8 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
 
 const ADetail = ({ client, db, setDb, onDel }) => {
   const [tab, setTab] = useState("profile");
-  const tabs = ["Perfil","Rutina","Dieta","Peso","Notas","Seguimiento","Chat 💬"];
-  const ids  = ["profile","routine","diet","weight","notes","tracking","chat"];
+  const tabs = ["Perfil","Rutina","Dieta","Peso","Notas","Seguimiento","Chat 💬","📋 Cuestionario"];
+  const ids  = ["profile","routine","diet","weight","notes","tracking","chat","questionnaire"];
   useEffect(() => { setTab("profile"); }, [client.id]);
 
   return (
@@ -2538,6 +2592,130 @@ const ADetail = ({ client, db, setDb, onDel }) => {
       {tab==="notes"    && <ANotesTab    client={client} notes={db.coachNotes[client.id]||[]}     db={db} setDb={setDb}/>}
       {tab==="tracking" && <ATrackingTab client={client} db={db}/>}
       {tab==="chat"     && <ClientChat client={client} isAdmin={true}/>}
+      {tab==="questionnaire" && <AQuestionnaireTab client={client}/>}
+    </div>
+  );
+};
+
+// ─── AQuestionnaireTab — shows client questionnaire answers to admin ─────────
+const AQuestionnaireTab = ({ client }) => {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const rows = await sb.select("client_questionnaires", `?client_id=eq.${client.id}`);
+        if (rows && rows.length > 0) setData(rows[0]);
+      } catch {}
+      setLoading(false);
+    })();
+  }, [client.id]);
+
+  if (loading) return <div style={{ textAlign: "center", color: t.textSub, padding: 40, animation: "pulse 1.5s infinite" }}>Cargando...</div>;
+
+  if (!data) return (
+    <Empty icon="notes" text="El cliente aún no ha rellenado el cuestionario inicial"/>
+  );
+
+  const a = data.answers || {};
+
+  const Line = ({ label, value, highlight }) => (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 14, color: highlight ? t.accent : t.text, fontWeight: highlight ? 700 : 500, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{value || <span style={{ color: t.textDim, fontWeight: 400 }}>—</span>}</div>
+    </div>
+  );
+
+  const Section = ({ title, icon, children }) => (
+    <Card style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 900, color: t.accent, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 18 }}>{icon}</span>{title}
+      </div>
+      {children}
+    </Card>
+  );
+
+  const fmtDeadline = d => ({ "1-2m": "1-2 meses", "3-6m": "3-6 meses", "6-12m": "6-12 meses", "+1a": "+1 año" }[d] || d);
+  const fmtSleep = s => ({ "<5": "menos 5h", "5-6": "5-6h", "6-7": "6-7h", "7-8": "7-8h", "8+": "más 8h" }[s] || s);
+  const fmtSteps = s => ({ "<5k": "menos 5.000", "5-8k": "5.000-8.000", "8-10k": "8.000-10.000", "10k+": "más 10.000" }[s] || s);
+  const fmtYN = v => v === "si" ? "Sí" : v === "no" ? "No" : v;
+
+  const completedAt = data.completed_at ? new Date(data.completed_at).toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" }) : "";
+
+  return (
+    <div>
+      <div style={{ background: "linear-gradient(135deg, rgba(240,160,48,0.12), rgba(240,160,48,0.04))", border: "1.5px solid rgba(240,160,48,0.3)", borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 4 }}>📋 Cuestionario completado</div>
+        <div style={{ fontSize: 12, color: t.textSub }}>Rellenado el {completedAt}</div>
+      </div>
+
+      <Section title="Objetivos" icon="🎯">
+        <Line label="OBJETIVO PRINCIPAL" value={a.objective} highlight/>
+        <Line label="PLAZO DESEADO" value={fmtDeadline(a.deadline)}/>
+      </Section>
+
+      <Section title="Hábitos diarios" icon="⏰">
+        <Line label="HORA DE DESPERTAR" value={a.wakeUp}/>
+        <Line label="HORA DE ACOSTARSE" value={a.bedTime}/>
+        <Line label="HORAS DE SUEÑO" value={fmtSleep(a.sleepHours)}/>
+        <Line label="COMIDAS AL DÍA" value={a.mealsPerDay}/>
+        <Line label="HORAS DE COMIDAS" value={a.mealTimes}/>
+      </Section>
+
+      <Section title="Entrenamiento" icon="💪">
+        <Line label="¿ENTRENA ACTUALMENTE?" value={fmtYN(a.trainingNow)}/>
+        {a.trainingNow === "si" && (
+          <>
+            <Line label="DÍAS POR SEMANA" value={a.trainingDays}/>
+            <Line label="TIPO DE ENTRENAMIENTO" value={a.trainingType === "otros" ? `Otros: ${a.trainingTypeOther || "—"}` : a.trainingType}/>
+          </>
+        )}
+        <Line label="PASOS AL DÍA" value={fmtSteps(a.steps)}/>
+      </Section>
+
+      <Section title="Alimentación actual" icon="🍽️">
+        <Line label="DÍA NORMAL" value={a.typicalDay}/>
+        <Line label="¿PICA ENTRE HORAS?" value={fmtYN(a.snacking)}/>
+        {a.snacking === "si" && <Line label="QUÉ COME ENTRE HORAS" value={a.snackingWhat}/>}
+      </Section>
+
+      <Section title="Preferencias" icon="❤️">
+        <Line label="LE GUSTAN" value={a.foodsLike}/>
+        <Line label="NO LE GUSTAN" value={a.foodsDislike}/>
+        <Line label="A EXCLUIR" value={a.foodsExclude}/>
+      </Section>
+
+      <Section title="Salud" icon="⚕️">
+        <Line label="¿INTOLERANCIAS/ALERGIAS?" value={fmtYN(a.allergy)}/>
+        {a.allergy === "si" && <Line label="DETALLES" value={a.allergyDetails} highlight/>}
+        <Line label="¿PROBLEMAS DIGESTIVOS?" value={fmtYN(a.digestion)}/>
+        {a.digestion === "si" && <Line label="DETALLES" value={a.digestionDetails} highlight/>}
+        <Line label="¿MEDICACIÓN/PATOLOGÍA?" value={fmtYN(a.meds)}/>
+        {a.meds === "si" && <Line label="DETALLES" value={a.medsDetails} highlight/>}
+      </Section>
+
+      <Section title="Historial" icon="📜">
+        <Line label="¿HA HECHO DIETAS ANTES?" value={fmtYN(a.pastDiets)}/>
+        {a.pastDiets === "si" && <Line label="QUÉ FUNCIONÓ Y QUÉ NO" value={a.pastDietsDetails}/>}
+      </Section>
+
+      <Section title="Contexto real" icon="💭">
+        <Line label="MAYOR PROBLEMA" value={a.biggestProblem} highlight/>
+        <Line label="SITUACIONES DE FALLO" value={a.failSituations}/>
+      </Section>
+
+      <Section title="Compromiso" icon="🔥">
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.05em", marginBottom: 6 }}>NIVEL DE COMPROMISO</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 28, fontWeight: 900, color: t.accent, letterSpacing: "-0.03em" }}>{a.commitment || "—"}</div>
+            <div style={{ fontSize: 14, color: t.textSub, fontWeight: 600 }}>/ 10</div>
+          </div>
+        </div>
+        <Line label="NOTAS FINALES" value={a.finalNotes}/>
+      </Section>
     </div>
   );
 };
@@ -3123,6 +3301,98 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
     setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros }] }) } ) }));
   };
 
+  // Add a second+ component to an existing option (makes it a combination)
+  const addComponentToItem = (mealId, secId, iid, food, grams) => {
+    const g = +grams || 100;
+    const newComponent = {
+      id: "c" + Date.now(),
+      foodName: food.name, name: food.name, emoji: food.emoji,
+      grams: g,
+      macros: {
+        kcal: Math.round((food.kcal * g) / 100),
+        prot: ((food.prot * g) / 100).toFixed(1),
+        carb: ((food.carb * g) / 100).toFixed(1),
+        fat:  ((food.fat  * g) / 100).toFixed(1),
+      },
+    };
+    setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.map(i => {
+      if (i.id !== iid) return i;
+      // Initialize components with the current item if not present
+      const existingComponents = i.components || [{ id: "c0_" + i.id, foodName: i.foodName, name: i.name, emoji: i.emoji, grams: i.grams, macros: i.macros }];
+      const allComponents = [...existingComponents, newComponent];
+      // Sum macros
+      const totalMacros = allComponents.reduce((acc, c) => ({
+        kcal: acc.kcal + (+c.macros?.kcal || 0),
+        prot: +(acc.prot + (+c.macros?.prot || 0)).toFixed(1),
+        carb: +(acc.carb + (+c.macros?.carb || 0)).toFixed(1),
+        fat:  +(acc.fat  + (+c.macros?.fat  || 0)).toFixed(1),
+      }), { kcal: 0, prot: 0, carb: 0, fat: 0 });
+      return { ...i, components: allComponents, macros: {
+        kcal: Math.round(totalMacros.kcal),
+        prot: totalMacros.prot.toFixed(1),
+        carb: totalMacros.carb.toFixed(1),
+        fat: totalMacros.fat.toFixed(1),
+      } };
+    }) }) }) }));
+  };
+
+  // Update grams of a specific component within a combined option
+  const updComponentGrams = (mealId, secId, iid, compId, newGrams) => {
+    setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.map(i => {
+      if (i.id !== iid || !i.components) return i;
+      const updatedComponents = i.components.map(c => {
+        if (c.id !== compId) return c;
+        const food = ALL_FOODS.find(f => f.name === c.foodName);
+        if (!food) return { ...c, grams: +newGrams };
+        const g = +newGrams || 0;
+        return { ...c, grams: g, macros: {
+          kcal: Math.round((food.kcal * g) / 100),
+          prot: ((food.prot * g) / 100).toFixed(1),
+          carb: ((food.carb * g) / 100).toFixed(1),
+          fat:  ((food.fat  * g) / 100).toFixed(1),
+        } };
+      });
+      const totalMacros = updatedComponents.reduce((acc, c) => ({
+        kcal: acc.kcal + (+c.macros?.kcal || 0),
+        prot: +(acc.prot + (+c.macros?.prot || 0)).toFixed(1),
+        carb: +(acc.carb + (+c.macros?.carb || 0)).toFixed(1),
+        fat:  +(acc.fat  + (+c.macros?.fat  || 0)).toFixed(1),
+      }), { kcal: 0, prot: 0, carb: 0, fat: 0 });
+      return { ...i, components: updatedComponents, macros: {
+        kcal: Math.round(totalMacros.kcal),
+        prot: totalMacros.prot.toFixed(1),
+        carb: totalMacros.carb.toFixed(1),
+        fat: totalMacros.fat.toFixed(1),
+      } };
+    }) }) }) }));
+  };
+
+  // Remove a component from a combined option
+  const rmComponent = (mealId, secId, iid, compId) => {
+    setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.map(i => {
+      if (i.id !== iid || !i.components) return i;
+      const remaining = i.components.filter(c => c.id !== compId);
+      if (remaining.length === 0) return i; // Can't remove last component this way
+      if (remaining.length === 1) {
+        // Convert back to simple item
+        const c = remaining[0];
+        return { ...i, components: undefined, name: c.name, emoji: c.emoji, foodName: c.foodName, grams: c.grams, amount: `${c.grams}g`, macros: c.macros };
+      }
+      const totalMacros = remaining.reduce((acc, c) => ({
+        kcal: acc.kcal + (+c.macros?.kcal || 0),
+        prot: +(acc.prot + (+c.macros?.prot || 0)).toFixed(1),
+        carb: +(acc.carb + (+c.macros?.carb || 0)).toFixed(1),
+        fat:  +(acc.fat  + (+c.macros?.fat  || 0)).toFixed(1),
+      }), { kcal: 0, prot: 0, carb: 0, fat: 0 });
+      return { ...i, components: remaining, macros: {
+        kcal: Math.round(totalMacros.kcal),
+        prot: totalMacros.prot.toFixed(1),
+        carb: totalMacros.carb.toFixed(1),
+        fat: totalMacros.fat.toFixed(1),
+      } };
+    }) }) }) }));
+  };
+
   const rmItem = (mealId, secId, iid) => setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: s.items.filter(i => i.id !== iid) }) }) }));
 
   const updItemGrams = (mealId, secId, iid, newGrams) => {
@@ -3362,16 +3632,14 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
                       {/* Existing options */}
                       {(sec.items || []).map((item, idx) => (
                         <div key={item.id} style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                          {/* Option header */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                             <div style={{ background: cfg.color, color: "white", borderRadius: 8, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 900, flexShrink: 0 }}>{letters[idx] || "?"}</div>
-                            <span style={{ fontSize: 16 }}>{item.emoji || "🍽️"}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: 13, color: t.text, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                Opción {letters[idx] || "?"}: {item.name}
-                              </div>
+                              <div style={{ fontSize: 13, color: t.text, fontWeight: 700 }}>Opción {letters[idx] || "?"}</div>
                               {item.macros && (
                                 <div style={{ fontSize: 10, color: t.textDim, fontWeight: 500, marginTop: 2 }}>
-                                  {item.macros.kcal} kcal · {item.macros.prot}P · {item.macros.carb}C · {item.macros.fat}G
+                                  Total: {item.macros.kcal} kcal · {item.macros.prot}P · {item.macros.carb}C · {item.macros.fat}G
                                 </div>
                               )}
                             </div>
@@ -3380,20 +3648,50 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
                               <Icon n="x" s={13}/>
                             </button>
                           </div>
-                          {/* Grams +/- stepper */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
-                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) - 10))}
-                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              −
-                            </button>
-                            <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
-                              <div style={{ fontSize: 16, fontWeight: 900, color: cfg.color, letterSpacing: "-0.02em" }}>{item.grams || 100}<span style={{ fontSize: 11, color: t.textSub, fontWeight: 700, marginLeft: 2 }}>g</span></div>
+
+                          {/* Render components or single food */}
+                          {item.components && item.components.length > 1 ? (
+                            // Multi-food option
+                            <div>
+                              {item.components.map(comp => (
+                                <div key={comp.id} style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 10px", marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                                  <span style={{ fontSize: 14 }}>{comp.emoji || "🍽️"}</span>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 12, color: t.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{comp.name}</div>
+                                  </div>
+                                  <button onClick={() => updComponentGrams(meal.id, sec.id, item.id, comp.id, Math.max(0, (comp.grams || 100) - 10))}
+                                    style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 6, width: 26, height: 26, cursor: "pointer", color: t.text, fontSize: 13, fontWeight: 900 }}>−</button>
+                                  <div style={{ minWidth: 52, textAlign: "center", fontSize: 13, fontWeight: 800, color: cfg.color }}>{comp.grams}<span style={{ fontSize: 9, color: t.textSub }}>g</span></div>
+                                  <button onClick={() => updComponentGrams(meal.id, sec.id, item.id, comp.id, (comp.grams || 100) + 10)}
+                                    style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 6, width: 26, height: 26, cursor: "pointer", color: t.text, fontSize: 13, fontWeight: 900 }}>+</button>
+                                  <button onClick={() => rmComponent(meal.id, sec.id, item.id, comp.id)}
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: t.textDim, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <Icon n="x" s={11}/>
+                                  </button>
+                                </div>
+                              ))}
                             </div>
-                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, (item.grams || 100) + 10)}
-                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              +
-                            </button>
-                          </div>
+                          ) : (
+                            // Single food (legacy)
+                            <>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                                <span style={{ fontSize: 15 }}>{item.emoji || "🍽️"}</span>
+                                <span style={{ fontSize: 13, color: t.text, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginBottom: 6 }}>
+                                <button onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) - 10))}
+                                  style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>−</button>
+                                <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
+                                  <div style={{ fontSize: 16, fontWeight: 900, color: cfg.color, letterSpacing: "-0.02em" }}>{item.grams || 100}<span style={{ fontSize: 11, color: t.textSub, fontWeight: 700, marginLeft: 2 }}>g</span></div>
+                                </div>
+                                <button onClick={() => updItemGrams(meal.id, sec.id, item.id, (item.grams || 100) + 10)}
+                                  style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>+</button>
+                              </div>
+                            </>
+                          )}
+
+                          {/* Add another food to this option */}
+                          <AddComponentSelector foods={foodOptions} onAdd={(food, grams) => addComponentToItem(meal.id, sec.id, item.id, food, grams)} accentColor={cfg.color}/>
                         </div>
                       ))}
 
@@ -3459,6 +3757,60 @@ const FoodSelector = ({ foods, onAdd, accentColor, nextLetter }) => {
           </button>
         </>
       )}
+    </div>
+  );
+};
+
+// ─── AddComponentSelector — add another food to an existing option ───────────
+const AddComponentSelector = ({ foods, onAdd, accentColor }) => {
+  const [open, setOpen] = useState(false);
+  const [selectedName, setSelectedName] = useState("");
+  const [grams, setGrams] = useState(100);
+
+  const handleAdd = () => {
+    const food = foods.find(f => f.name === selectedName);
+    if (!food || !grams) return;
+    onAdd(food, grams);
+    setSelectedName(""); setGrams(100); setOpen(false);
+  };
+
+  const si = { background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 10px", color: t.text, fontSize: 12, fontFamily: "inherit", outline: "none" };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        style={{ width: "100%", background: "none", border: `1px dashed ${t.border}`, borderRadius: 8, padding: "8px 10px", marginTop: 6, cursor: "pointer", color: t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+        + Añadir otro alimento a esta opción
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: `1.5px dashed ${t.border}`, borderRadius: 8, padding: 10, marginTop: 6 }}>
+      <select value={selectedName} onChange={e => setSelectedName(e.target.value)} autoFocus
+        style={{ ...si, width: "100%", boxSizing: "border-box", marginBottom: 8 }}>
+        <option value="">Elige un alimento...</option>
+        {foods.map(f => <option key={f.name} value={f.name}>{f.emoji} {f.name}</option>)}
+      </select>
+      {selectedName && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, justifyContent: "center" }}>
+          <button onClick={() => setGrams(g => Math.max(0, (+g) - 10))}
+            style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6, width: 30, height: 30, cursor: "pointer", color: t.text, fontSize: 14, fontWeight: 900 }}>−</button>
+          <div style={{ background: t.bgElevated, borderRadius: 6, padding: "6px 12px", minWidth: 60, textAlign: "center", fontSize: 13, fontWeight: 900, color: accentColor }}>{grams}<span style={{ fontSize: 10, color: t.textSub, marginLeft: 2 }}>g</span></div>
+          <button onClick={() => setGrams(g => (+g) + 10)}
+            style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6, width: 30, height: 30, cursor: "pointer", color: t.text, fontSize: 14, fontWeight: 900 }}>+</button>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={handleAdd} disabled={!selectedName}
+          style={{ flex: 1, background: selectedName ? accentColor : t.bgElevated, border: "none", borderRadius: 8, padding: "8px", cursor: selectedName ? "pointer" : "not-allowed", color: "white", fontSize: 12, fontWeight: 800, fontFamily: "inherit", opacity: selectedName ? 1 : 0.4 }}>
+          ✓ Añadir
+        </button>
+        <button onClick={() => { setOpen(false); setSelectedName(""); }}
+          style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", color: t.textSub, fontSize: 11, fontFamily: "inherit" }}>
+          Cancelar
+        </button>
+      </div>
     </div>
   );
 };
@@ -3627,6 +3979,298 @@ const ANewClient = ({ db, setDb, onDone }) => {
     </div>
   );
 };
+
+// ─── ClientQuestionnaire — initial complex questionnaire (9 sections) ────────
+const ClientQuestionnaire = ({ client, onDone, onBack }) => {
+  const [step, setStep] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [a, setA] = useState({}); // all answers
+
+  const set = (k, v) => setA(p => ({ ...p, [k]: v }));
+
+  // Button style for options
+  const ChipBtn = ({ active, onClick, children, color }) => (
+    <button type="button" onClick={onClick}
+      style={{ background: active ? (color ? `${color}22` : t.accentAlpha) : t.bgElevated, border: `1.5px solid ${active ? (color || "rgba(30,155,191,0.4)") : t.border}`, borderRadius: 10, padding: "10px 14px", cursor: "pointer", color: active ? (color || t.accent) : t.textSub, fontSize: 13, fontWeight: 700, fontFamily: "inherit", flex: 1, minWidth: 0 }}>
+      {children}
+    </button>
+  );
+
+  const Chips = ({ value, options, onChange, color }) => (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+      {options.map(opt => {
+        const [val, lbl] = Array.isArray(opt) ? opt : [opt, opt];
+        return (
+          <div key={val} style={{ flex: "1 1 calc(50% - 3px)", minWidth: 0 }}>
+            <ChipBtn active={value === val} onClick={() => onChange(val)} color={color}>{lbl}</ChipBtn>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const Q = ({ children }) => (
+    <div style={{ color: t.text, fontSize: 14, fontWeight: 700, marginBottom: 10, lineHeight: 1.4 }}>{children}</div>
+  );
+
+  const TA = ({ value, onChange, placeholder, rows = 3 }) => (
+    <textarea value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} rows={rows}
+      style={{ width: "100%", boxSizing: "border-box", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", resize: "vertical", marginBottom: 16, lineHeight: 1.5 }}/>
+  );
+
+  const TI = ({ value, onChange, placeholder, type = "text" }) => (
+    <input value={value || ""} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type}
+      style={{ width: "100%", boxSizing: "border-box", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 16 }}/>
+  );
+
+  const sections = [
+    // Section 1 — Objetivos
+    {
+      title: "Objetivos", icon: "🎯",
+      validate: () => a.objective && a.deadline,
+      render: () => (
+        <>
+          <Q>¿Cuál es tu objetivo principal?</Q>
+          <TA value={a.objective} onChange={v => set("objective", v)} placeholder="Ej: Perder grasa, ganar músculo, tonificar, mejorar rendimiento..." rows={2}/>
+          <Q>¿Para cuándo te gustaría conseguirlo?</Q>
+          <Chips value={a.deadline} options={[["1-2m","1-2 meses"],["3-6m","3-6 meses"],["6-12m","6-12 meses"],["+1a","+1 año"]]} onChange={v => set("deadline", v)}/>
+        </>
+      ),
+    },
+    // Section 2 — Hábitos diarios
+    {
+      title: "Hábitos diarios", icon: "⏰",
+      validate: () => a.wakeUp && a.bedTime && a.sleepHours && a.mealsPerDay && a.mealTimes,
+      render: () => (
+        <>
+          <Q>¿A qué hora te despiertas normalmente?</Q>
+          <TI value={a.wakeUp} onChange={v => set("wakeUp", v)} placeholder="Ej: 07:00"/>
+          <Q>¿A qué hora te acuestas normalmente?</Q>
+          <TI value={a.bedTime} onChange={v => set("bedTime", v)} placeholder="Ej: 23:30"/>
+          <Q>¿Cuántas horas duermes normalmente?</Q>
+          <Chips value={a.sleepHours} options={[["<5","menos 5h"],["5-6","5-6h"],["6-7","6-7h"],["7-8","7-8h"],["8+","más 8h"]]} onChange={v => set("sleepHours", v)}/>
+          <Q>¿Cuántas comidas haces al día actualmente?</Q>
+          <Chips value={a.mealsPerDay} options={["2","3","4","5","6+"]} onChange={v => set("mealsPerDay", v)}/>
+          <Q>¿A qué horas sueles comer?</Q>
+          <TA value={a.mealTimes} onChange={v => set("mealTimes", v)} placeholder="Ej: 8:00 desayuno, 11:00 snack, 14:00 comida, 17:00 merienda, 21:00 cena" rows={2}/>
+        </>
+      ),
+    },
+    // Section 3 — Entrenamiento
+    {
+      title: "Entrenamiento", icon: "💪",
+      validate: () => a.trainingNow && (a.trainingNow === "no" || (a.trainingDays && a.trainingType)) && a.steps,
+      render: () => (
+        <>
+          <Q>¿Entrenas actualmente?</Q>
+          <Chips value={a.trainingNow} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("trainingNow", v)}/>
+          {a.trainingNow === "si" && (
+            <>
+              <Q>¿Cuántos días a la semana entrenas?</Q>
+              <Chips value={a.trainingDays} options={["1","2","3","4","5","6","7"]} onChange={v => set("trainingDays", v)}/>
+              <Q>¿Qué tipo de entrenamiento haces?</Q>
+              <Chips value={a.trainingType} options={[["fuerza","Fuerza"],["cardio","Cardio"],["hiit","HIIT"],["mixto","Mixto"],["otros","Otros"]]} onChange={v => set("trainingType", v)}/>
+              {a.trainingType === "otros" && <TI value={a.trainingTypeOther} onChange={v => set("trainingTypeOther", v)} placeholder="Especifica..."/>}
+            </>
+          )}
+          <Q>¿Cuántos pasos haces al día aproximadamente?</Q>
+          <Chips value={a.steps} options={[["<5k","menos 5.000"],["5-8k","5.000-8.000"],["8-10k","8.000-10.000"],["10k+","más 10.000"]]} onChange={v => set("steps", v)}/>
+        </>
+      ),
+    },
+    // Section 4 — Alimentación actual
+    {
+      title: "Alimentación actual", icon: "🍽️",
+      validate: () => a.typicalDay && a.snacking && (a.snacking === "no" || a.snackingWhat),
+      render: () => (
+        <>
+          <Q>Describe todo lo que comes en un día normal</Q>
+          <TA value={a.typicalDay} onChange={v => set("typicalDay", v)} placeholder="Ej: Desayuno: café con leche y tostada. Comida: pasta con pollo. Cena: ensalada..." rows={5}/>
+          <Q>¿Sueles picar entre horas?</Q>
+          <Chips value={a.snacking} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("snacking", v)}/>
+          {a.snacking === "si" && (
+            <>
+              <Q>¿Qué sueles comer?</Q>
+              <TA value={a.snackingWhat} onChange={v => set("snackingWhat", v)} placeholder="Ej: galletas, chocolate, fruta, frutos secos..." rows={2}/>
+            </>
+          )}
+        </>
+      ),
+    },
+    // Section 5 — Preferencias
+    {
+      title: "Preferencias", icon: "❤️",
+      validate: () => a.foodsLike && a.foodsDislike && a.foodsExclude !== undefined,
+      render: () => (
+        <>
+          <Q>¿Qué alimentos te gustan mucho?</Q>
+          <TA value={a.foodsLike} onChange={v => set("foodsLike", v)} placeholder="Ej: pollo, arroz, aguacate..."/>
+          <Q>¿Qué alimentos NO te gustan?</Q>
+          <TA value={a.foodsDislike} onChange={v => set("foodsDislike", v)} placeholder="Ej: pescado, setas..."/>
+          <Q>¿Hay alimentos que no quieras incluir por ningún motivo?</Q>
+          <TA value={a.foodsExclude} onChange={v => set("foodsExclude", v)} placeholder="Ej: por religión, por ética, por digestión... Si no hay, escribe: ninguno"/>
+        </>
+      ),
+    },
+    // Section 6 — Salud
+    {
+      title: "Salud", icon: "⚕️",
+      validate: () => a.allergy && (a.allergy === "no" || a.allergyDetails)
+        && a.digestion && (a.digestion === "no" || a.digestionDetails)
+        && a.meds && (a.meds === "no" || a.medsDetails),
+      render: () => (
+        <>
+          <Q>¿Tienes alguna intolerancia o alergia?</Q>
+          <Chips value={a.allergy} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("allergy", v)}/>
+          {a.allergy === "si" && <TA value={a.allergyDetails} onChange={v => set("allergyDetails", v)} placeholder="Especifica cuáles..." rows={2}/>}
+
+          <Q>¿Tienes problemas digestivos (hinchazón, gases, etc.)?</Q>
+          <Chips value={a.digestion} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("digestion", v)}/>
+          {a.digestion === "si" && <TA value={a.digestionDetails} onChange={v => set("digestionDetails", v)} placeholder="Describe los síntomas..." rows={2}/>}
+
+          <Q>¿Tomas medicación o tienes alguna patología?</Q>
+          <Chips value={a.meds} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("meds", v)}/>
+          {a.meds === "si" && <TA value={a.medsDetails} onChange={v => set("medsDetails", v)} placeholder="Especifica..." rows={2}/>}
+        </>
+      ),
+    },
+    // Section 7 — Historial
+    {
+      title: "Historial", icon: "📜",
+      validate: () => a.pastDiets && (a.pastDiets === "no" || a.pastDietsDetails),
+      render: () => (
+        <>
+          <Q>¿Has hecho dietas antes?</Q>
+          <Chips value={a.pastDiets} options={[["si","✓ Sí"],["no","✕ No"]]} onChange={v => set("pastDiets", v)}/>
+          {a.pastDiets === "si" && (
+            <>
+              <Q>¿Qué te funcionó y qué no?</Q>
+              <TA value={a.pastDietsDetails} onChange={v => set("pastDietsDetails", v)} placeholder="Cuéntanos tu experiencia..." rows={4}/>
+            </>
+          )}
+        </>
+      ),
+    },
+    // Section 8 — Contexto real
+    {
+      title: "Contexto real", icon: "💭",
+      validate: () => a.biggestProblem && a.failSituations,
+      render: () => (
+        <>
+          <Q>¿Cuál crees que es tu mayor problema con la alimentación?</Q>
+          <TA value={a.biggestProblem} onChange={v => set("biggestProblem", v)} placeholder="Sé sincero/a, esto nos ayuda a ayudarte..." rows={3}/>
+          <Q>¿Qué situaciones te hacen fallar más?</Q>
+          <TA value={a.failSituations} onChange={v => set("failSituations", v)} placeholder="Ej: fines de semana, cenas fuera, estrés, aburrimiento..." rows={3}/>
+        </>
+      ),
+    },
+    // Section 9 — Compromiso
+    {
+      title: "Compromiso", icon: "🔥",
+      validate: () => a.commitment && a.finalNotes !== undefined,
+      render: () => (
+        <>
+          <Q>Del 1 al 10, ¿cómo de comprometido/a estás con el proceso?</Q>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
+            {[1,2,3,4,5,6,7,8,9,10].map(n => (
+              <button key={n} type="button" onClick={() => set("commitment", String(n))}
+                style={{ background: a.commitment === String(n) ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${a.commitment === String(n) ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "12px 0", cursor: "pointer", color: a.commitment === String(n) ? t.accent : t.textSub, fontSize: 15, fontWeight: 800, fontFamily: "inherit" }}>
+                {n}
+              </button>
+            ))}
+          </div>
+          <Q>¿Hay algo importante que deba tener en cuenta para tu planificación?</Q>
+          <TA value={a.finalNotes} onChange={v => set("finalNotes", v)} placeholder="Cualquier detalle útil. Si no, escribe: nada que añadir" rows={3}/>
+        </>
+      ),
+    },
+  ];
+
+  const current = sections[step];
+  const totalSteps = sections.length;
+  const progress = ((step + 1) / totalSteps) * 100;
+
+  const next = () => {
+    if (!current.validate()) {
+      setErr("Por favor responde todas las preguntas de esta sección");
+      return;
+    }
+    setErr("");
+    if (step < totalSteps - 1) {
+      setStep(s => s + 1);
+      window.scrollTo(0, 0);
+    } else {
+      submit();
+    }
+  };
+
+  const prev = () => {
+    setErr("");
+    if (step > 0) setStep(s => s - 1);
+  };
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await sb.insert("client_questionnaires", {
+        client_id: client.id,
+        answers: a,
+      });
+      // Notify all admins
+      const admins = await sb.select("admins", "?select=id");
+      for (const admin of admins || []) {
+        await sb.insert("admin_notifications", {
+          admin_id: admin.id, type: "questionnaire",
+          title: "Cuestionario completado",
+          body: `${client.name} ha rellenado el cuestionario inicial`,
+          link_type: "client", link_id: client.id, read: false,
+        });
+      }
+      onDone();
+    } catch (e) {
+      setErr("Error al guardar. Inténtalo de nuevo.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: t.bg, maxWidth: 430, margin: "0 auto", display: "flex", flexDirection: "column" }}>
+      {/* Header */}
+      <div style={{ padding: "52px 20px 20px", background: `linear-gradient(180deg, rgba(240,160,48,0.08) 0%, transparent 100%)`, borderBottom: `1px solid ${t.border}` }}>
+        <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:14, padding:0 }}>
+          <Icon n="back" s={16}/> Salir (se perderá lo rellenado)
+        </button>
+        <div style={{ fontSize: 22, fontWeight: 900, color: t.text, letterSpacing: "-0.02em", marginBottom: 4 }}>📋 Cuestionario inicial</div>
+        <div style={{ fontSize: 13, color: t.textSub, marginBottom: 16 }}>Sección {step + 1} de {totalSteps} · {current.icon} {current.title}</div>
+        <div style={{ height: 6, background: t.bgElevated, borderRadius: 3, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${progress}%`, background: "linear-gradient(90deg, #f0a030, #c07818)", transition: "width 0.3s" }}/>
+        </div>
+      </div>
+
+      {/* Questions */}
+      <div style={{ flex: 1, padding: "20px 20px 16px", overflowY: "auto" }}>
+        {current.render()}
+        {err && <div style={{ color: t.danger, fontSize: 13, fontWeight: 600, marginBottom: 14, background: t.dangerAlpha, padding: "10px 14px", borderRadius: 10, border: `1px solid rgba(230,80,80,0.3)` }}>⚠️ {err}</div>}
+      </div>
+
+      {/* Navigation */}
+      <div style={{ display: "flex", gap: 10, padding: "12px 20px 24px", borderTop: `1px solid ${t.border}`, background: t.bg }}>
+        {step > 0 && (
+          <button onClick={prev} disabled={saving}
+            style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "13px 20px", cursor: "pointer", color: t.textSub, fontSize: 14, fontWeight: 700, fontFamily: "inherit" }}>
+            ← Atrás
+          </button>
+        )}
+        <button onClick={next} disabled={saving}
+          style={{ flex: 1, background: "linear-gradient(135deg, #f0a030, #c07818)", border: "none", borderRadius: 12, padding: "13px 20px", cursor: saving ? "not-allowed" : "pointer", color: "white", fontSize: 14, fontWeight: 800, fontFamily: "inherit", opacity: saving ? 0.6 : 1, boxShadow: "0 4px 14px rgba(240,160,48,0.3)" }}>
+          {saving ? "Guardando..." : step === totalSteps - 1 ? "✓ Finalizar cuestionario" : "Siguiente →"}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 
 const ClientOnboarding = ({ client, db, setDb, onDone }) => {
   const [f, setF] = useState({ phone: client.phone||"", age: client.age||"", height: client.height||"", gender: client.gender||"", goal: client.goal||"", personalNotes: client.personalNotes||"", injuries: client.injuries||"Sin lesiones actuales." });
