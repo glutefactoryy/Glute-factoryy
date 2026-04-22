@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.4";
+const APP_VERSION = "5.4.1";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -15,7 +15,7 @@ const SB_H = {
 };
 
 // Fetch with timeout to prevent infinite hangs
-const fetchWithTimeout = (url, options = {}, ms = 8000) => {
+const fetchWithTimeout = (url, options = {}, ms = 25000) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   return fetch(url, { ...options, signal: controller.signal })
@@ -4527,7 +4527,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
         method: "POST",
         headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" },
         body: blob,
-      });
+      }, 60000);
       if (!res.ok) { console.error("Photo upload failed:", await res.text()); return null; }
       return `${SB_URL}/storage/v1/object/public/checkin-photos/${path}`;
     } catch (e) { console.error("Photo upload error:", e); return null; }
@@ -4580,7 +4580,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
           method: "POST",
           headers: { ...SB_H, "Prefer": "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(sbData),
-        });
+        }, 30000);
         const upsertBody = await upsertRes.text();
         if (upsertRes.ok) {
           result = JSON.parse(upsertBody);
@@ -4590,7 +4590,11 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
           return;
         }
       } catch (fetchErr) {
-        setSaveError(`Fetch error: ${fetchErr.message}`);
+        if (fetchErr.name === "AbortError" || fetchErr.message?.includes("abort")) {
+          setSaveError("La conexión es lenta. Prueba con menos fotos o con mejor señal.");
+        } else {
+          setSaveError(`Error al guardar: ${fetchErr.message}`);
+        }
         setSaving(false);
         return;
       }
