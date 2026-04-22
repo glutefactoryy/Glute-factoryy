@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.4.5";
+const APP_VERSION = "5.5";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -107,6 +107,73 @@ const notifyAllAdmins = async (exceptId, type, title, body, linkType = null, lin
     );
   } catch {}
 };
+
+// ─── Global error logger ──────────────────────────────────────────────────────
+// Writes errors to Supabase and notifies all admins
+let _lastErrorKey = "";
+let _lastErrorTs = 0;
+const logError = async (errorType, errorMessage, context = "", errorStack = "") => {
+  try {
+    // Dedup: same error within 5s is ignored
+    const key = `${errorType}:${errorMessage?.slice(0, 80)}`;
+    const now = Date.now();
+    if (key === _lastErrorKey && now - _lastErrorTs < 5000) return;
+    _lastErrorKey = key; _lastErrorTs = now;
+
+    // Try to get user info from localStorage (set at login)
+    let clientId = null, clientName = null, userRole = "unknown";
+    try {
+      const userRaw = localStorage.getItem("gf_currentUser");
+      if (userRaw) {
+        const u = JSON.parse(userRaw);
+        clientId = u.clientId || u.id || null;
+        clientName = u.name || null;
+        userRole = u.role || (u.clientId ? "client" : "admin");
+      }
+    } catch {}
+
+    const payload = {
+      client_id: clientId,
+      client_name: clientName,
+      user_role: userRole,
+      error_type: errorType || "unknown",
+      error_message: String(errorMessage || "").slice(0, 1000),
+      error_stack: String(errorStack || "").slice(0, 3000),
+      context: String(context || "").slice(0, 500),
+      url: typeof window !== "undefined" ? window.location.href.slice(0, 500) : "",
+      user_agent: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 300) : "",
+    };
+
+    await sb.insert("error_logs", payload);
+
+    // Notify all admins
+    const admins = await sb.select("admins", "?select=id");
+    if (!admins) return;
+    const who = clientName ? `${clientName}` : `Un ${userRole}`;
+    await Promise.all(admins.map(a =>
+      sendNotification(a.id, "error",
+        `🐛 Error en la app`,
+        `${who}: ${errorType} — ${String(errorMessage || "").slice(0, 100)}`,
+        "errors", null
+      )
+    ));
+  } catch (e) {
+    console.error("[logError] Failed to log:", e);
+  }
+};
+
+// Global window error handler — catches uncaught JS errors
+if (typeof window !== "undefined" && !window.__gf_errorHandlerInstalled) {
+  window.__gf_errorHandlerInstalled = true;
+  window.addEventListener("error", (e) => {
+    logError("window.error", e.message, `${e.filename}:${e.lineno}`, e.error?.stack || "");
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const msg = e.reason?.message || String(e.reason) || "unhandled rejection";
+    logError("promise.unhandled", msg, "unhandledrejection", e.reason?.stack || "");
+  });
+}
+
 const mapCheckinRow = r => {
   // Parse external factors from comment if stored there
   let comment = r.comment || "";
@@ -1775,6 +1842,159 @@ const mkItem2 = (foodName, grams, foods) => {
   };
 };
 
+// ─── AdminErrors — view app errors captured automatically ───────────────────
+const AdminErrors = ({ onBack }) => {
+  const [errors, setErrors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+  const [expandedId, setExpandedId] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const filter = showAll ? "" : "&resolved=eq.false";
+      const rows = await sb.select("error_logs", `?order=created_at.desc&limit=200${filter}`);
+      setErrors(rows || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [showAll]);
+
+  const markResolved = async (id) => {
+    try {
+      await fetchWithTimeout(`${SB_URL}/rest/v1/error_logs?id=eq.${id}`, {
+        method: "PATCH",
+        headers: { ...SB_H, "Prefer": "return=minimal" },
+        body: JSON.stringify({ resolved: true }),
+      });
+      setErrors(p => p.map(e => e.id === id ? { ...e, resolved: true } : e));
+      if (!showAll) setErrors(p => p.filter(e => e.id !== id));
+    } catch {}
+  };
+
+  const deleteError = async (id) => {
+    if (!confirm("¿Eliminar este error del log?")) return;
+    try {
+      await sb.remove("error_logs", "id", id);
+      setErrors(p => p.filter(e => e.id !== id));
+    } catch {}
+  };
+
+  const clearAllResolved = async () => {
+    if (!confirm("¿Eliminar TODOS los errores resueltos? Esto no se puede deshacer.")) return;
+    try {
+      await fetchWithTimeout(`${SB_URL}/rest/v1/error_logs?resolved=eq.true`, {
+        method: "DELETE",
+        headers: SB_H,
+      });
+      await load();
+    } catch {}
+  };
+
+  const fmtDate = d => {
+    const dt = new Date(d);
+    const now = new Date();
+    const diff = (now - dt) / 1000;
+    if (diff < 60) return "hace segundos";
+    if (diff < 3600) return `hace ${Math.floor(diff/60)}m`;
+    if (diff < 86400) return `hace ${Math.floor(diff/3600)}h`;
+    return dt.toLocaleString("es-ES", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+  };
+
+  const unresolvedCount = errors.filter(e => !e.resolved).length;
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+        <div style={{ fontSize: 20, fontWeight: 900, color: t.text }}>🐛 Errores de la app</div>
+      </div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 16 }}>
+        {unresolvedCount > 0 ? `${unresolvedCount} error${unresolvedCount !== 1 ? "es" : ""} sin resolver` : "Todo en orden ✓"}
+      </div>
+
+      {/* Filter tabs */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+        <button onClick={() => setShowAll(false)}
+          style={{ flex: 1, background: !showAll ? t.accentAlpha : t.bgCard, border: `1.5px solid ${!showAll ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "9px", cursor: "pointer", color: !showAll ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+          Pendientes ({unresolvedCount})
+        </button>
+        <button onClick={() => setShowAll(true)}
+          style={{ flex: 1, background: showAll ? t.accentAlpha : t.bgCard, border: `1.5px solid ${showAll ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "9px", cursor: "pointer", color: showAll ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+          Todos ({errors.length})
+        </button>
+      </div>
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 40, animation: "pulse 1.5s infinite" }}>Cargando...</div>}
+
+      {!loading && errors.length === 0 && (
+        <Empty icon="check" text={showAll ? "No hay errores registrados" : "Todo resuelto 🎉"}/>
+      )}
+
+      {!loading && errors.map(e => {
+        const isExpanded = expandedId === e.id;
+        return (
+          <Card key={e.id} style={{ marginBottom: 10, opacity: e.resolved ? 0.55 : 1 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: e.resolved ? t.bgElevated : "rgba(224,90,90,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>
+                {e.resolved ? "✓" : "🐛"}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 3 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: t.accent, background: t.accentAlpha, padding: "2px 7px", borderRadius: 6 }}>{e.error_type}</span>
+                  {e.user_role && <span style={{ fontSize: 10, color: t.textDim, fontWeight: 600 }}>{e.user_role}</span>}
+                  {e.client_name && <span style={{ fontSize: 11, color: t.text, fontWeight: 600 }}>· {e.client_name}</span>}
+                </div>
+                <div style={{ fontSize: 13, color: t.text, fontWeight: 500, lineHeight: 1.4, wordBreak: "break-word" }}>{e.error_message}</div>
+                <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{fmtDate(e.created_at)}</div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <button onClick={() => setExpandedId(isExpanded ? null : e.id)}
+                style={{ flex: 1, background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "7px", cursor: "pointer", color: t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                {isExpanded ? "Ocultar detalles" : "Ver detalles"}
+              </button>
+              {!e.resolved && (
+                <button onClick={() => markResolved(e.id)}
+                  style={{ background: "rgba(138,201,66,0.15)", border: `1px solid rgba(138,201,66,0.3)`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", color: "#8ac942", fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                  ✓ Resolver
+                </button>
+              )}
+              <button onClick={() => deleteError(e.id)}
+                style={{ background: t.dangerAlpha, border: `1px solid rgba(224,90,90,0.2)`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", color: t.danger, fontSize: 11, fontFamily: "inherit" }}>
+                <Icon n="trash" s={12}/>
+              </button>
+            </div>
+
+            {/* Details expanded */}
+            {isExpanded && (
+              <div style={{ marginTop: 10, padding: "10px 12px", background: t.bgElevated, borderRadius: 8, fontSize: 11, color: t.textSub, fontFamily: "monospace", lineHeight: 1.5 }}>
+                {e.context && <div style={{ marginBottom: 6 }}><span style={{ color: t.accent, fontWeight: 700 }}>Contexto:</span> {e.context}</div>}
+                {e.url && <div style={{ marginBottom: 6, wordBreak: "break-all" }}><span style={{ color: t.accent, fontWeight: 700 }}>URL:</span> {e.url}</div>}
+                {e.user_agent && <div style={{ marginBottom: 6, wordBreak: "break-all" }}><span style={{ color: t.accent, fontWeight: 700 }}>Dispositivo:</span> {e.user_agent}</div>}
+                {e.error_stack && <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}><span style={{ color: t.accent, fontWeight: 700 }}>Stack:</span>{"\n"}{e.error_stack}</div>}
+              </div>
+            )}
+          </Card>
+        );
+      })}
+
+      {showAll && errors.some(e => e.resolved) && (
+        <button onClick={clearAllResolved}
+          style={{ width: "100%", background: "none", border: `1px dashed ${t.border}`, borderRadius: 10, padding: "11px", cursor: "pointer", color: t.textDim, fontSize: 11, fontFamily: "inherit", marginTop: 10 }}>
+          🗑️ Eliminar todos los errores resueltos
+        </button>
+      )}
+    </div>
+  );
+};
+
 // ─── AdminFoods — manage custom food database ────────────────────────────────
 const AdminFoods = ({ onBack }) => {
   const { currentUser, customFoods, loadCustomFoods } = useApp();
@@ -2034,7 +2254,7 @@ const AdminManagement = ({ onBack }) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── AdminNotifications ───────────────────────────────────────────────────────
-const AdminNotifications = ({ onBack, onSel }) => {
+const AdminNotifications = ({ onBack, onSel, onGoToErrors }) => {
   const { currentUser } = useApp();
   const [notifs, setNotifs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2073,7 +2293,14 @@ const AdminNotifications = ({ onBack, onSel }) => {
     if (type === "chat") return "💬";
     if (type === "changelog") return "📋";
     if (type === "admin_chat") return "👥";
+    if (type === "error") return "🐛";
+    if (type === "questionnaire") return "📝";
     return "🔔";
+  };
+
+  const handleClick = n => {
+    if (n.type === "error" && onGoToErrors) { onGoToErrors(); return; }
+    if (n.link_type === "client" && n.link_id && onSel) { onSel(n.link_id); return; }
   };
 
   return (
@@ -2083,17 +2310,20 @@ const AdminNotifications = ({ onBack, onSel }) => {
       </button>
       {loading && <div style={{ textAlign:"center", color:t.textSub, padding:40, animation:"pulse 1.5s infinite" }}>Cargando...</div>}
       {!loading && notifs.length === 0 && <Empty icon="alert" text="Sin notificaciones nuevas"/>}
-      {notifs.map(n => (
-        <div key={n.id} onClick={() => n.link_type === "client" && onSel(n.link_id)}
-          style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 10, display: "flex", gap: 12, alignItems: "flex-start", cursor: n.link_type === "client" ? "pointer" : "default" }}>
-          <div style={{ fontSize: 24, flexShrink: 0 }}>{iconFor(n.type)}</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: t.text, marginBottom: 2 }}>{n.title}</div>
-            <div style={{ fontSize: 13, color: t.textSub, lineHeight: 1.5 }}>{n.body}</div>
-            <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{fmtTime(n.created_at)}</div>
+      {notifs.map(n => {
+        const clickable = n.type === "error" || (n.link_type === "client" && n.link_id);
+        return (
+          <div key={n.id} onClick={() => handleClick(n)}
+            style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 10, display: "flex", gap: 12, alignItems: "flex-start", cursor: clickable ? "pointer" : "default" }}>
+            <div style={{ fontSize: 24, flexShrink: 0 }}>{iconFor(n.type)}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: t.text, marginBottom: 2 }}>{n.title}</div>
+              <div style={{ fontSize: 13, color: t.textSub, lineHeight: 1.5 }}>{n.body}</div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{fmtTime(n.created_at)}</div>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
@@ -2369,6 +2599,7 @@ const AdminApp = () => {
     if (view === "notifications") return "🔔 Notificaciones";
     if (view === "foods") return "🍽️ Alimentos";
     if (view === "basediets") return "🍴 Dietas base";
+    if (view === "errors") return "🐛 Errores";
     return sel?.name;
   };
 
@@ -2417,25 +2648,37 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")} onBaseDiets={()=>setView("basediets")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")} onBaseDiets={()=>setView("basediets")} onErrors={()=>setView("errors")}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")}/>}
         {view === "admins"    && isSuperAdmin && <AdminManagement onBack={() => setView("list")}/>}
         {view === "chat"      && <AdminChat/>}
         {view === "changelog" && <AdminChangelog onBack={() => setView("settings")}/>}
-        {view === "notifications" && <AdminNotifications onBack={() => setView("list")} onSel={(clientId) => { setSelId(clientId); setView("detail"); }}/>}
+        {view === "notifications" && <AdminNotifications onBack={() => setView("list")} onSel={(clientId) => { setSelId(clientId); setView("detail"); }} onGoToErrors={() => setView("errors")}/>}
         {view === "foods"     && <AdminFoods onBack={() => setView("list")}/>}
         {view === "basediets" && <AdminBaseDiets onBack={() => setView("list")}/>}
+        {view === "errors"    && <AdminErrors onBack={() => setView("list")}/>}
       </div>
     </div>
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods, onBaseDiets }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods, onBaseDiets, onErrors }) => {
   const { currentUser } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [errorCount, setErrorCount] = useState(0);
+
+  // Load pending errors count
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sb.select("error_logs", "?resolved=eq.false&select=id");
+        setErrorCount(rows?.length || 0);
+      } catch {}
+    })();
+  }, []);
 
   // Always check last week — checkins are done on Sundays
   const relevantWeekKey = getCalWeekKey(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
@@ -2550,6 +2793,26 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Editar dietas base</div>
         <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Personalizar las plantillas Mujer 1800 y Hombre 3000</div>
+      </div>
+      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+    </button>
+
+    {/* Errors button — all admins */}
+    <button onClick={onErrors}
+      style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
+      <div style={{ width: 40, height: 40, borderRadius: 11, background: errorCount > 0 ? "rgba(224,90,90,0.15)" : t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, position: "relative" }}>
+        🐛
+        {errorCount > 0 && (
+          <div style={{ position: "absolute", top: -4, right: -4, background: t.danger, color: "white", borderRadius: 10, minWidth: 18, height: 18, fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
+            {errorCount > 99 ? "99+" : errorCount}
+          </div>
+        )}
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Errores de la app</div>
+        <div style={{ fontSize: 12, color: errorCount > 0 ? t.danger : t.textSub, marginTop: 2 }}>
+          {errorCount > 0 ? `${errorCount} error${errorCount !== 1 ? "es" : ""} sin resolver` : "Sin errores pendientes"}
+        </div>
       </div>
       <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
     </button>
@@ -4376,6 +4639,7 @@ const ClientQuestionnaire = ({ client, onDone, onBack }) => {
       onDone();
     } catch (e) {
       setErr("Error al guardar. Inténtalo de nuevo.");
+      logError("questionnaire.save", e?.message || String(e), "Client questionnaire submit", e?.stack || "");
       setSaving(false);
     }
   };
@@ -4687,9 +4951,18 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
         headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" },
         body: blob,
       }, 60000);
-      if (!res.ok) { console.error("Photo upload failed:", await res.text()); return null; }
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Photo upload failed:", errText);
+        logError("photo.upload_failed", `Status ${res.status}: ${errText}`, `Upload photo pose=${pose} week=${weekNum}`, "");
+        return null;
+      }
       return `${SB_URL}/storage/v1/object/public/checkin-photos/${path}`;
-    } catch (e) { console.error("Photo upload error:", e); return null; }
+    } catch (e) {
+      console.error("Photo upload error:", e);
+      logError("photo.upload_exception", e?.message || String(e), `Upload photo pose=${pose} week=${weekNum}`, e?.stack || "");
+      return null;
+    }
   };
 
   const handleSave = async () => {
@@ -4745,14 +5018,17 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
           result = JSON.parse(upsertBody);
         } else {
           setSaveError(`SB Error ${upsertRes.status}: ${upsertBody}`);
+          logError("checkin.sb_error", `Error ${upsertRes.status}: ${upsertBody}`, "Check-in upsert", "");
           setSaving(false);
           return;
         }
       } catch (fetchErr) {
         if (fetchErr.name === "AbortError" || fetchErr.message?.includes("abort")) {
           setSaveError("La conexión es lenta. Prueba con menos fotos o con mejor señal.");
+          logError("checkin.timeout", fetchErr.message || "aborted", "Check-in fetch aborted", fetchErr.stack || "");
         } else {
           setSaveError(`Error al guardar: ${fetchErr.message}`);
+          logError("checkin.fetch_error", fetchErr.message || String(fetchErr), "Check-in fetch error", fetchErr.stack || "");
         }
         setSaving(false);
         return;
@@ -4760,6 +5036,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
 
       if (!result) {
         setSaveError("No se pudo guardar en la base de datos. Inténtalo de nuevo.");
+        logError("checkin.no_result", "Upsert returned no result", "Check-in save", "");
         setSaving(false);
         return;
       }
@@ -4788,6 +5065,7 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
     } catch (err) {
       console.error("Error saving check-in:", err);
       setSaveError(`Error al guardar: ${err?.message || "inténtalo de nuevo"}`);
+      logError("checkin.exception", err?.message || String(err), "Check-in handleSave outer catch", err?.stack || "");
     }
     setSaving(false);
     setUploadProgress("");
@@ -5271,6 +5549,11 @@ const Empty = ({ icon, text }) => (
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
   static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, errorInfo) {
+    try {
+      logError("react.boundary", error?.message || String(error), errorInfo?.componentStack || "", error?.stack || "");
+    } catch {}
+  }
   render() {
     if (this.state.hasError) return (
       <div style={{ minHeight: "100vh", background: "#07090f", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -5375,6 +5658,7 @@ export default function App() {
     const localUser = db.users.find(u => u.email === email && u.password === password);
     if (localUser) {
       await sb.insert("login_attempts", { email, success: true });
+      try { localStorage.setItem("gf_currentUser", JSON.stringify(localUser)); } catch {}
       setCurrentUser(localUser);
       await loadFromSupabase();
       return true;
@@ -5387,6 +5671,7 @@ export default function App() {
         const adminUser = { id: a.id, email: a.email, password: a.password, role: a.role, name: a.name, passwordChanged: a.password_changed || false };
         setDb(p => ({ ...p, users: p.users.find(u => u.id === a.id) ? p.users : [...p.users, adminUser] }));
         await sb.insert("login_attempts", { email, success: true });
+        try { localStorage.setItem("gf_currentUser", JSON.stringify(adminUser)); } catch {}
         setCurrentUser(adminUser);
         await loadFromSupabase();
         return true;
@@ -5403,6 +5688,7 @@ export default function App() {
         };
         setDb(p => ({ ...p, users: p.users.find(u => u.id === clientUser.id) ? p.users : [...p.users, clientUser] }));
         await sb.insert("login_attempts", { email, success: true });
+        try { localStorage.setItem("gf_currentUser", JSON.stringify(clientUser)); } catch {}
         setCurrentUser(clientUser);
         await loadFromSupabase();
         return true;
@@ -5413,7 +5699,10 @@ export default function App() {
     return false;
   }, [db, loadFromSupabase]);
 
-  const logout = useCallback(() => setCurrentUser(null), []);
+  const logout = useCallback(() => {
+    try { localStorage.removeItem("gf_currentUser"); } catch {}
+    setCurrentUser(null);
+  }, []);
 
   // Show loading screen until app is ready
   if (!appReady) return <LoadingScreen error={loadError} retry={() => { setAppReady(false); loadFromSupabase().then(() => setAppReady(true)); }}/>;
