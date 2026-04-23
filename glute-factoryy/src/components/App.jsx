@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.7";
+const APP_VERSION = "5.5.7.1";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1900,7 +1900,6 @@ const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, curr
                                 {step > 0 ? `+${step}` : step}
                               </button>
                             ))}
-                          </div>
                           </div>
                         </div>
                       ))}
