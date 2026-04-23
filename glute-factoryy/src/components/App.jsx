@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5";
+const APP_VERSION = "5.5.7";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -173,6 +173,52 @@ if (typeof window !== "undefined" && !window.__gf_errorHandlerInstalled) {
     logError("promise.unhandled", msg, "unhandledrejection", e.reason?.stack || "");
   });
 }
+
+// ─── VALIDATION HELPERS ───────────────────────────────────────────────────────
+// Returns null if valid, or error message string if invalid.
+const validateAge = (val, { required = false } = {}) => {
+  if (val === "" || val === null || val === undefined) return required ? "La edad es obligatoria" : null;
+  const n = Number(val);
+  if (isNaN(n)) return "La edad debe ser un número";
+  if (n < 10 || n > 99) return "La edad debe estar entre 10 y 99 años";
+  return null;
+};
+
+const validateHeight = (val, { required = false } = {}) => {
+  if (val === "" || val === null || val === undefined) return required ? "La altura es obligatoria" : null;
+  const n = Number(val);
+  if (isNaN(n)) return "La altura debe ser un número";
+  if (n < 100 || n > 230) return "La altura debe estar entre 100 y 230 cm";
+  return null;
+};
+
+const validateWeight = (val, { required = false } = {}) => {
+  if (val === "" || val === null || val === undefined) return required ? "El peso es obligatorio" : null;
+  const n = Number(val);
+  if (isNaN(n)) return "El peso debe ser un número";
+  if (n < 30 || n > 250) return "El peso debe estar entre 30 y 250 kg";
+  return null;
+};
+
+const validateEmail = (val, { required = false } = {}) => {
+  if (!val || !val.trim()) return required ? "El email es obligatorio" : null;
+  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
+  if (!ok) return "El email no tiene un formato válido";
+  return null;
+};
+
+const validatePhone = (val, { required = false } = {}) => {
+  if (!val || !val.trim()) return required ? "El teléfono es obligatorio" : null;
+  const digits = val.replace(/\D/g, "");
+  if (digits.length < 6) return "El teléfono tiene que tener al menos 6 dígitos";
+  return null;
+};
+
+// Run multiple validations and return first error found, or null
+const validateAll = (checks) => {
+  for (const err of checks) if (err) return err;
+  return null;
+};
 
 const mapCheckinRow = r => {
   // Parse external factors from comment if stored there
@@ -658,6 +704,36 @@ const Login = () => {
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(true);
+  const [autoTried, setAutoTried] = useState(false);
+
+  // On mount: try to restore saved credentials and auto-login
+  useEffect(() => {
+    if (autoTried) return;
+    setAutoTried(true);
+    try {
+      const saved = localStorage.getItem("gf_rememberMe");
+      if (!saved) return;
+      const { email, password } = JSON.parse(saved);
+      if (email && password) {
+        setUser(email);
+        setPass(password);
+        // Auto-login silently in background
+        (async () => {
+          setLoading(true);
+          const ok = await login(email, password);
+          if (ok !== true) {
+            // Credentials are no longer valid → clear
+            try { localStorage.removeItem("gf_rememberMe"); } catch {}
+            setErr(ok === "blocked"
+              ? "🔒 Demasiados intentos. Espera 15 minutos."
+              : "Las credenciales guardadas ya no son válidas. Entra de nuevo.");
+          }
+          setLoading(false);
+        })();
+      }
+    } catch {}
+  }, []);
 
   const go = async () => {
     setLoading(true); setErr("");
@@ -666,6 +742,13 @@ const Login = () => {
       setErr("🔒 Demasiados intentos fallidos. Espera 15 minutos antes de volver a intentarlo.");
     } else if (!ok) {
       setErr("Usuario o contraseña incorrectos");
+    } else {
+      // Successful login — save credentials if remember is on
+      if (remember) {
+        try { localStorage.setItem("gf_rememberMe", JSON.stringify({ email: user, password: pass })); } catch {}
+      } else {
+        try { localStorage.removeItem("gf_rememberMe"); } catch {}
+      }
     }
     setLoading(false);
   };
@@ -699,6 +782,14 @@ const Login = () => {
 
           <Field label="USUARIO" value={user} onChange={setUser} placeholder="Tu usuario" onKeyDown={e => e.key === "Enter" && go()} />
           <Field label="CONTRASEÑA" value={pass} onChange={setPass} type="password" placeholder="••••••••" onKeyDown={e => e.key === "Enter" && go()} />
+
+          {/* Remember me checkbox */}
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "4px 0", marginBottom: 16, userSelect: "none" }}>
+            <div onClick={() => setRemember(!remember)} style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${remember ? t.accent : t.border}`, background: remember ? t.accent : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all 0.15s" }}>
+              {remember && <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+            </div>
+            <span onClick={() => setRemember(!remember)} style={{ fontSize: 13, color: t.textSub, fontWeight: 600 }}>Recordar mi sesión en este dispositivo</span>
+          </label>
 
           {err && (
             <div style={{ background: t.dangerAlpha, border: `1px solid rgba(224,90,90,0.2)`, borderRadius: 10, padding: "11px 14px", marginBottom: 16, color: t.danger, fontSize: 13, fontWeight: 600 }}>
@@ -1356,6 +1447,16 @@ const CDiet = ({ diet }) => {
         </div>
       </Card>
 
+      {/* Recommendations / notes from coach */}
+      {diet.notes && diet.notes.trim() && (
+        <div style={{ background: "linear-gradient(135deg, rgba(240,160,48,0.1), rgba(240,160,48,0.03))", border: "1.5px solid rgba(240,160,48,0.25)", borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#f0a030", letterSpacing: "0.05em", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            📝 RECOMENDACIONES DE TU COACH
+          </div>
+          <div style={{ fontSize: 13, color: t.text, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{diet.notes}</div>
+        </div>
+      )}
+
       {/* Meal cards */}
       <div>
         {diet.meals.map((meal, i) => (
@@ -1789,14 +1890,17 @@ const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, curr
                             </div>
                             <button onClick={() => rmItem(meal.id, sec.id, item.id)} style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 28, height: 28, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}><Icon n="x" s={13}/></button>
                           </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center" }}>
-                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) - 10))}
-                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>−</button>
-                            <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
-                              <div style={{ fontSize: 16, fontWeight: 900, color: cfg.color }}>{item.grams || 100}<span style={{ fontSize: 11, color: t.textSub, marginLeft: 2 }}>g</span></div>
-                            </div>
-                            <button onClick={() => updItemGrams(meal.id, sec.id, item.id, (item.grams || 100) + 10)}
-                              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>+</button>
+                          <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", textAlign: "center", marginBottom: 8 }}>
+                            <div style={{ fontSize: 20, fontWeight: 900, color: cfg.color }}>{item.grams || 100}<span style={{ fontSize: 12, color: t.textSub, marginLeft: 3 }}>g</span></div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr 1fr", gap: 4 }}>
+                            {[-100, -10, -5, 5, 10, 100].map(step => (
+                              <button key={step} onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) + step))}
+                                style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, padding: "8px 2px", cursor: "pointer", color: step > 0 ? cfg.color : t.textSub, fontSize: 12, fontWeight: 800, fontFamily: "inherit" }}>
+                                {step > 0 ? `+${step}` : step}
+                              </button>
+                            ))}
+                          </div>
                           </div>
                         </div>
                       ))}
@@ -3083,6 +3187,13 @@ const AEditProfile = ({ client, db, setDb }) => {
   useEffect(() => { setF({...client}); setSaved(false); setResetDone(false); setNewPassword(""); }, [client.id]);
 
   const save = async () => {
+    const vErr = validateAll([
+      validateEmail(f.email, { required: true }),
+      validateAge(f.age),
+      validateHeight(f.height),
+      validatePhone(f.phone),
+    ]);
+    if (vErr) { alert(vErr); return; }
     setDb(p=>({...p,clients:p.clients.map(c=>c.id===client.id?f:c)}));
     setSaved(true); setTimeout(()=>setSaved(false),2000);
     await sb.upsert("clients", {
@@ -3880,10 +3991,153 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
   const generateBase1800 = () => loadAndApplyBaseDiet("female-1800", DEFAULT_FEMALE_MEALS, "Dieta Base Mujer 1800 kcal");
   const generateBase3000 = () => loadAndApplyBaseDiet("male-3000",   DEFAULT_MALE_MEALS,   "Dieta Base Hombre 3000 kcal");
 
+  // ─── Templates ─────────────────────────────────────────────────────────
+  const { currentUser } = useApp();
+  const [showTplList, setShowTplList] = useState(false);
+  const [myTemplates, setMyTemplates] = useState([]);
+
+  const saveAsTemplate = async () => {
+    if (!d.meals || d.meals.length === 0) {
+      alert("La dieta está vacía, no hay nada que guardar.");
+      return;
+    }
+    const name = prompt("Nombre de la plantilla:", d.name || "");
+    if (!name || !name.trim()) return;
+    const genderOpt = prompt("¿Para qué género? Escribe: hombre / mujer / ambos", "ambos");
+    const gender = genderOpt === "hombre" ? "male" : genderOpt === "mujer" ? "female" : "any";
+    try {
+      await sb.insert("diet_templates", {
+        name: name.trim(),
+        gender,
+        diet_json: d,
+        created_by: currentUser?.id || null,
+        created_by_name: currentUser?.name || null,
+      });
+      alert(`✓ Plantilla "${name}" guardada. Disponible para todos los admins.`);
+    } catch (e) {
+      alert("Error al guardar la plantilla: " + (e?.message || "desconocido"));
+      logError("diet_template.save", e?.message || String(e), "Save template", e?.stack || "");
+    }
+  };
+
+  const loadTemplates = async () => {
+    try {
+      // Filter by client gender if set
+      let filter = "?order=created_at.desc";
+      if (client.gender === "female") filter = "?gender=in.(female,any)&order=created_at.desc";
+      if (client.gender === "male")   filter = "?gender=in.(male,any)&order=created_at.desc";
+      const rows = await sb.select("diet_templates", filter);
+      setMyTemplates(rows || []);
+      setShowTplList(true);
+    } catch (e) {
+      alert("Error al cargar plantillas");
+    }
+  };
+
+  const applyTemplate = (tpl) => {
+    if (d.meals && d.meals.length > 0) {
+      if (!confirm(`Esto sustituirá la dieta actual con la plantilla "${tpl.name}". ¿Continuar?`)) return;
+    }
+    const diet = tpl.diet_json || {};
+    // Generate new IDs so meals don't clash
+    const newMeals = (diet.meals || []).map(m => {
+      const newMealId = "m" + Date.now() + Math.random().toString(36).slice(2, 5);
+      return {
+        ...m,
+        id: newMealId,
+        sections: (m.sections || []).map(s => ({
+          ...s,
+          id: "s-" + s.type + "-" + newMealId,
+          items: (s.items || []).map(i => ({
+            ...i,
+            id: "i" + Date.now() + Math.random().toString(36).slice(2, 7),
+          })),
+        })),
+      };
+    });
+    setD(p => ({
+      ...p,
+      name: diet.name || tpl.name,
+      notes: diet.notes || "",
+      meals: newMeals,
+    }));
+    setOpenMeal(newMeals[0]?.id);
+    setShowTplList(false);
+  };
+
+  const deleteTemplate = async (tplId, tplName) => {
+    if (!confirm(`¿Eliminar la plantilla "${tplName}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await sb.remove("diet_templates", "id", tplId);
+      setMyTemplates(p => p.filter(t => t.id !== tplId));
+    } catch {
+      alert("Error al eliminar");
+    }
+  };
+
   return (
     <div>
+      {/* Template selector overlay */}
+      {showTplList && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(7,9,15,0.92)", zIndex: 1000, display: "flex", flexDirection: "column", padding: "40px 20px 20px", overflow: "auto" }}>
+          <div style={{ maxWidth: 430, width: "100%", margin: "0 auto" }}>
+            <button onClick={() => setShowTplList(false)}
+              style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+              <Icon n="back" s={16}/> Cerrar
+            </button>
+            <div style={{ fontSize: 20, fontWeight: 900, color: t.text, marginBottom: 4 }}>📂 Mis plantillas</div>
+            <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>
+              {client.gender ? `Filtradas para ${client.gender === "male" ? "hombre" : "mujer"}` : "Sin filtro de género"}
+            </div>
+            {myTemplates.length === 0 && (
+              <Empty icon="food" text="No hay plantillas guardadas aún. Crea una desde cualquier dieta con el botón 💾"/>
+            )}
+            {myTemplates.map(tpl => (
+              <Card key={tpl.id} style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 10, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
+                    {tpl.gender === "female" ? "♀" : tpl.gender === "male" ? "♂" : "⚥"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{tpl.name}</div>
+                    <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>
+                      {tpl.diet_json?.meals?.length || 0} comidas · por {tpl.created_by_name || "admin"}
+                    </div>
+                  </div>
+                  <button onClick={() => applyTemplate(tpl)}
+                    style={{ background: t.accent, color: "white", border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    Usar
+                  </button>
+                  <button onClick={() => deleteTemplate(tpl.id, tpl.name)}
+                    style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Icon n="trash" s={13}/>
+                  </button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Diet name */}
       <Field label="NOMBRE DE LA DIETA" value={d.name} onChange={v=>setD(p=>({...p,name:v}))}/>
+
+      {/* Recommendations / notes */}
+      <Field label="📝 RECOMENDACIONES Y PAUTAS" value={d.notes || ""} onChange={v=>setD(p=>({...p,notes:v}))}
+        multiline rows={4}
+        placeholder="Ej: Beber 2-3L de agua al día. Cenar 2h antes de dormir. Post-entreno dentro de los 45min. Pesar alimentos en crudo..."/>
+
+      {/* Template actions */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        <button onClick={loadTemplates}
+          style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: t.text, fontSize: 12, fontWeight: 700, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          📂 Mis plantillas
+        </button>
+        <button onClick={saveAsTemplate}
+          style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: t.text, fontSize: 12, fontWeight: 700, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          💾 Guardar plantilla
+        </button>
+      </div>
 
       {/* Generate base diet buttons — based on client gender */}
       <div style={{ marginBottom: 16, display: "grid", gridTemplateColumns: client.gender ? "1fr" : "1fr 1fr", gap: 8 }}>
@@ -4001,20 +4255,27 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
                             // Multi-food option
                             <div>
                               {item.components.map(comp => (
-                                <div key={comp.id} style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 10px", marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
-                                  <span style={{ fontSize: 14 }}>{comp.emoji || "🍽️"}</span>
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontSize: 12, color: t.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{comp.name}</div>
+                                <div key={comp.id} style={{ background: t.bgElevated, borderRadius: 8, padding: "10px", marginBottom: 6 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                                    <span style={{ fontSize: 14 }}>{comp.emoji || "🍽️"}</span>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontSize: 12, color: t.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{comp.name}</div>
+                                    </div>
+                                    <div style={{ fontSize: 14, fontWeight: 900, color: cfg.color, minWidth: 52, textAlign: "center" }}>{comp.grams}<span style={{ fontSize: 10, color: t.textSub, marginLeft: 2 }}>g</span></div>
+                                    <button onClick={() => rmComponent(meal.id, sec.id, item.id, comp.id)}
+                                      style={{ background: "none", border: "none", cursor: "pointer", color: t.textDim, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                      <Icon n="x" s={11}/>
+                                    </button>
                                   </div>
-                                  <button onClick={() => updComponentGrams(meal.id, sec.id, item.id, comp.id, Math.max(0, (comp.grams || 100) - 10))}
-                                    style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 6, width: 26, height: 26, cursor: "pointer", color: t.text, fontSize: 13, fontWeight: 900 }}>−</button>
-                                  <div style={{ minWidth: 52, textAlign: "center", fontSize: 13, fontWeight: 800, color: cfg.color }}>{comp.grams}<span style={{ fontSize: 9, color: t.textSub }}>g</span></div>
-                                  <button onClick={() => updComponentGrams(meal.id, sec.id, item.id, comp.id, (comp.grams || 100) + 10)}
-                                    style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 6, width: 26, height: 26, cursor: "pointer", color: t.text, fontSize: 13, fontWeight: 900 }}>+</button>
-                                  <button onClick={() => rmComponent(meal.id, sec.id, item.id, comp.id)}
-                                    style={{ background: "none", border: "none", cursor: "pointer", color: t.textDim, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    <Icon n="x" s={11}/>
-                                  </button>
+                                  {/* Stepper buttons for component */}
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr 1fr", gap: 3 }}>
+                                    {[-100, -10, -5, 5, 10, 100].map(step => (
+                                      <button key={step} onClick={() => updComponentGrams(meal.id, sec.id, item.id, comp.id, Math.max(0, (comp.grams || 100) + step))}
+                                        style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 6, padding: "6px 2px", cursor: "pointer", color: step > 0 ? cfg.color : t.textSub, fontSize: 11, fontWeight: 800, fontFamily: "inherit" }}>
+                                        {step > 0 ? `+${step}` : step}
+                                      </button>
+                                    ))}
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -4025,14 +4286,18 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
                                 <span style={{ fontSize: 15 }}>{item.emoji || "🍽️"}</span>
                                 <span style={{ fontSize: 13, color: t.text, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
                               </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginBottom: 6 }}>
-                                <button onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) - 10))}
-                                  style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>−</button>
-                                <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
-                                  <div style={{ fontSize: 16, fontWeight: 900, color: cfg.color, letterSpacing: "-0.02em" }}>{item.grams || 100}<span style={{ fontSize: 11, color: t.textSub, fontWeight: 700, marginLeft: 2 }}>g</span></div>
-                                </div>
-                                <button onClick={() => updItemGrams(meal.id, sec.id, item.id, (item.grams || 100) + 10)}
-                                  style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>+</button>
+                              {/* Grams display */}
+                              <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", textAlign: "center", marginBottom: 8 }}>
+                                <div style={{ fontSize: 20, fontWeight: 900, color: cfg.color, letterSpacing: "-0.02em" }}>{item.grams || 100}<span style={{ fontSize: 12, color: t.textSub, fontWeight: 700, marginLeft: 3 }}>g</span></div>
+                              </div>
+                              {/* Stepper buttons: −100 / −10 / −5 | +5 / +10 / +100 */}
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr 1fr", gap: 4 }}>
+                                {[-100, -10, -5, 5, 10, 100].map(step => (
+                                  <button key={step} onClick={() => updItemGrams(meal.id, sec.id, item.id, Math.max(0, (item.grams || 100) + step))}
+                                    style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, padding: "8px 2px", cursor: "pointer", color: step > 0 ? cfg.color : t.textSub, fontSize: 12, fontWeight: 800, fontFamily: "inherit" }}>
+                                    {step > 0 ? `+${step}` : step}
+                                  </button>
+                                ))}
                               </div>
                             </>
                           )}
@@ -4086,14 +4351,14 @@ const FoodSelector = ({ foods, onAdd, accentColor, nextLetter }) => {
       {selectedName && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", marginBottom: 8 }}>
-            <button onClick={() => setGrams(g => Math.max(0, (+g) - 10))}
+            <button onClick={() => setGrams(g => Math.max(0, (+g) - 5))}
               style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>
               −
             </button>
             <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 16px", minWidth: 80, textAlign: "center" }}>
               <div style={{ fontSize: 16, fontWeight: 900, color: accentColor, letterSpacing: "-0.02em" }}>{grams}<span style={{ fontSize: 11, color: t.textSub, fontWeight: 700, marginLeft: 2 }}>g</span></div>
             </div>
-            <button onClick={() => setGrams(g => (+g) + 10)}
+            <button onClick={() => setGrams(g => (+g) + 5)}
               style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontWeight: 900 }}>
               +
             </button>
@@ -4141,10 +4406,10 @@ const AddComponentSelector = ({ foods, onAdd, accentColor }) => {
       </select>
       {selectedName && (
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, justifyContent: "center" }}>
-          <button onClick={() => setGrams(g => Math.max(0, (+g) - 10))}
+          <button onClick={() => setGrams(g => Math.max(0, (+g) - 5))}
             style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6, width: 30, height: 30, cursor: "pointer", color: t.text, fontSize: 14, fontWeight: 900 }}>−</button>
           <div style={{ background: t.bgElevated, borderRadius: 6, padding: "6px 12px", minWidth: 60, textAlign: "center", fontSize: 13, fontWeight: 900, color: accentColor }}>{grams}<span style={{ fontSize: 10, color: t.textSub, marginLeft: 2 }}>g</span></div>
-          <button onClick={() => setGrams(g => (+g) + 10)}
+          <button onClick={() => setGrams(g => (+g) + 5)}
             style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 6, width: 30, height: 30, cursor: "pointer", color: t.text, fontSize: 14, fontWeight: 900 }}>+</button>
         </div>
       )}
@@ -4167,6 +4432,8 @@ const AWeightTab = ({ client, weights, db, setDb }) => {
   const [d, setD] = useState(new Date().toISOString().slice(0,10));
   const add = async () => {
     const wf=parseFloat(w); if(isNaN(wf)) return;
+    const wErr = validateWeight(wf);
+    if (wErr) { alert(wErr); return; }
     setDb(p=>({...p,weightHistory:{...p.weightHistory,[client.id]:[...weights,{date:d,weight:wf}].sort((a,b)=>a.date.localeCompare(b.date))}}));
     setW("");
     await sb.insert("weight_entries", { client_id: client.id, date: d, weight_kg: wf });
@@ -4267,6 +4534,13 @@ const ANewClient = ({ db, setDb, onDone }) => {
 
   const create = async () => {
     if(!f.name||!f.email||!f.password) return alert("Nombre, usuario y contraseña son obligatorios");
+    const emailErr = validateEmail(f.email, { required: true });
+    if (emailErr) return alert(emailErr);
+    if (f.password.length < 6) return alert("La contraseña debe tener al menos 6 caracteres");
+    // Check for duplicate email
+    if (db.clients.some(c => c.email?.toLowerCase() === f.email.toLowerCase().trim())) {
+      return alert("Ya existe un cliente con este email");
+    }
     const id="c"+Date.now(), uid="u"+Date.now();
     const startDate = new Date().toISOString().slice(0,10);
     const avatar = f.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase();
@@ -4706,6 +4980,13 @@ const ClientOnboarding = ({ client, db, setDb, onDone }) => {
   const save = async () => {
     if (!f.gender) return alert("Por favor indica si eres hombre o mujer");
     if (!f.goal) return alert("Por favor indica tu objetivo");
+    // Field validations
+    const vErr = validateAll([
+      validateAge(f.age),
+      validateHeight(f.height),
+      validatePhone(f.phone),
+    ]);
+    if (vErr) return alert(vErr);
     if (newPass && newPass !== newPass2) { setPassErr("Las contraseñas no coinciden"); return; }
     if (newPass && newPass.length < 6) { setPassErr("Mínimo 6 caracteres"); return; }
     setPassErr("");
@@ -4943,29 +5224,51 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
     setPhotoFiles(p => ({ ...p, [pose]: compressed }));
   };
 
-  const uploadPhoto = async (blob, clientId, weekNum, pose) => {
-    try {
-      const path = `${clientId}/semana-${weekNum}-${pose}.jpg`;
-      const res = await fetchWithTimeout(`${SB_URL}/storage/v1/object/checkin-photos/${path}`, {
-        method: "POST",
-        headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" },
-        body: blob,
-      }, 60000);
-      if (!res.ok) {
+  const uploadPhoto = async (blob, clientId, weekNum, pose, onProgress) => {
+    const MAX_ATTEMPTS = 3;
+    const path = `${clientId}/semana-${weekNum}-${pose}.jpg`;
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        if (onProgress && attempt > 1) onProgress(`Reintentando... (${attempt}/${MAX_ATTEMPTS})`);
+        const res = await fetchWithTimeout(`${SB_URL}/storage/v1/object/checkin-photos/${path}`, {
+          method: "POST",
+          headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "image/jpeg", "x-upsert": "true" },
+          body: blob,
+        }, 60000);
+        if (res.ok) {
+          if (attempt > 1) {
+            // Log recovery for stats
+            logError("photo.upload_recovered", `Succeeded on attempt ${attempt}/${MAX_ATTEMPTS}`, `pose=${pose} week=${weekNum}`, "");
+          }
+          return `${SB_URL}/storage/v1/object/public/checkin-photos/${path}`;
+        }
         const errText = await res.text();
-        console.error("Photo upload failed:", errText);
-        logError("photo.upload_failed", `Status ${res.status}: ${errText}`, `Upload photo pose=${pose} week=${weekNum}`, "");
-        return null;
+        lastError = `Status ${res.status}: ${errText}`;
+        console.warn(`Photo upload attempt ${attempt} failed:`, lastError);
+      } catch (e) {
+        lastError = e?.message || String(e);
+        console.warn(`Photo upload attempt ${attempt} exception:`, lastError);
       }
-      return `${SB_URL}/storage/v1/object/public/checkin-photos/${path}`;
-    } catch (e) {
-      console.error("Photo upload error:", e);
-      logError("photo.upload_exception", e?.message || String(e), `Upload photo pose=${pose} week=${weekNum}`, e?.stack || "");
-      return null;
+
+      // Wait before retrying (exponential backoff: 1s, 2s)
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise(r => setTimeout(r, attempt * 1000));
+      }
     }
+
+    // All attempts failed
+    logError("photo.upload_failed_final", lastError || "unknown", `pose=${pose} week=${weekNum} attempts=${MAX_ATTEMPTS}`, "");
+    return null;
   };
 
   const handleSave = async () => {
+    // Validate weight if provided
+    if (form.weight) {
+      const wErr = validateWeight(form.weight);
+      if (wErr) { setSaveError(wErr); return; }
+    }
     setSaving(true);
     setSaveError("");
     setUploadProgress("");
@@ -4974,15 +5277,24 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
     try {
       // Compress and upload photos
       const hasPhotos = photoFiles.front || photoFiles.side || photoFiles.back;
-      if (hasPhotos) setUploadProgress("compressing");
+      if (hasPhotos) setUploadProgress("Subiendo fotos...");
+
+      // Track which photos failed for user message
+      const failed = [];
+      const uploadOne = async (file, label, existingUrl) => {
+        if (!file) return existingUrl || null;
+        const url = await uploadPhoto(file, client.id, weekNum, label, msg => setUploadProgress(`${label}: ${msg}`));
+        if (!url) failed.push(label);
+        return url || existingUrl || null;
+      };
 
       const [photoFrontUrl, photoSideUrl, photoBackUrl] = await Promise.all([
-        photoFiles.front ? uploadPhoto(photoFiles.front, client.id, weekNum, "frente") : Promise.resolve(existing?.photoFront || null),
-        photoFiles.side  ? uploadPhoto(photoFiles.side,  client.id, weekNum, "perfil") : Promise.resolve(existing?.photoSide  || null),
-        photoFiles.back  ? uploadPhoto(photoFiles.back,  client.id, weekNum, "espalda") : Promise.resolve(existing?.photoBack || null),
+        uploadOne(photoFiles.front, "frente", existing?.photoFront),
+        uploadOne(photoFiles.side,  "perfil", existing?.photoSide),
+        uploadOne(photoFiles.back,  "espalda", existing?.photoBack),
       ]);
 
-      if (hasPhotos) setUploadProgress("saving");
+      if (hasPhotos) setUploadProgress("Guardando...");
 
       const sbData = {
         client_id: client.id,
@@ -5059,6 +5371,12 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
       // Backup local (foto)
       if (window?.storage?.set) {
         try { await window.storage.set(ciKey(client.id, weekNum), JSON.stringify(checkin)); } catch {}
+      }
+
+      // If some photos failed, warn the user but don't block success
+      if (failed.length > 0) {
+        const names = failed.map(f => f === "frente" ? "Frente" : f === "perfil" ? "Perfil" : "Espalda").join(", ");
+        alert(`✓ Check-in guardado correctamente.\n\n⚠️ No se pudieron subir estas fotos: ${names}\n\nPrueba a subirlas de nuevo más tarde desde tu histórico o con mejor conexión.`);
       }
 
       onSaved(checkin);
@@ -5162,17 +5480,13 @@ const CheckInForm = ({ client, weekNum, db, setDb, onSaved, existing }) => {
       {saving && uploadProgress && (
         <div style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.25)`, borderRadius: 10, padding: "11px 14px", marginBottom: 14, color: t.accent, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span>
-          {uploadProgress === "compressing" && "Comprimiendo fotos..."}
-          {uploadProgress === "uploading" && "Subiendo fotos..."}
-          {uploadProgress === "saving" && "Guardando datos..."}
+          {uploadProgress}
         </div>
       )}
 
       <Btn onClick={handleSave} disabled={saving} full size="lg">
         {saving
-          ? uploadProgress === "compressing" ? "Comprimiendo..." 
-          : uploadProgress === "saving" ? "Guardando..."
-          : "Subiendo fotos..."
+          ? (uploadProgress || "Guardando...")
           : <><Icon n="check" s={18}/> Guardar check-in</>}
       </Btn>
     </div>
@@ -5605,6 +5919,28 @@ export default function App() {
   const [loadError, setLoadError] = useState(false);
   const [customFoods, setCustomFoods] = useState([]);
 
+  // Ensure viewport is set correctly for mobile (no pinch-zoom-out needed)
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let vp = document.querySelector('meta[name="viewport"]');
+    if (!vp) {
+      vp = document.createElement("meta");
+      vp.name = "viewport";
+      document.head.appendChild(vp);
+    }
+    vp.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+    // Also prevent automatic iOS zoom when focusing inputs (requires font-size ≥ 16px on inputs)
+    const style = document.createElement("style");
+    style.id = "gf-mobile-fix";
+    style.textContent = `
+      html, body { -webkit-text-size-adjust: 100%; touch-action: manipulation; }
+      input, select, textarea { font-size: 16px !important; }
+      * { -webkit-tap-highlight-color: transparent; }
+    `;
+    if (!document.getElementById("gf-mobile-fix")) document.head.appendChild(style);
+  }, []);
+
   const loadCustomFoods = useCallback(async () => {
     try {
       const rows = await sb.select("custom_foods", "?order=name");
@@ -5701,6 +6037,7 @@ export default function App() {
 
   const logout = useCallback(() => {
     try { localStorage.removeItem("gf_currentUser"); } catch {}
+    try { localStorage.removeItem("gf_rememberMe"); } catch {}
     setCurrentUser(null);
   }, []);
 
