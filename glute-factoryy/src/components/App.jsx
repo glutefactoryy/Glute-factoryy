@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.7.1";
+const APP_VERSION = "5.5.8";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2098,6 +2098,165 @@ const AdminErrors = ({ onBack }) => {
   );
 };
 
+// ─── AdminExercises — manage custom exercises library ────────────────────────
+const AdminExercises = ({ onBack }) => {
+  const { currentUser, customExercises, loadCustomExercises } = useApp();
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ name: "", emoji: "💪", muscle_group: "pecho", default_sets: "3", default_reps: "10", default_rest: "90s", video_url: "" });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [muscleFilter, setMuscleFilter] = useState("all");
+
+  useEffect(() => { loadCustomExercises(); }, []);
+
+  const resetForm = () => {
+    setForm({ name: "", emoji: "💪", muscle_group: "pecho", default_sets: "3", default_reps: "10", default_rest: "90s", video_url: "" });
+    setErr("");
+  };
+
+  const saveEx = async () => {
+    if (!form.name.trim()) { setErr("Nombre obligatorio"); return; }
+    setSaving(true); setErr("");
+    try {
+      await sb.insert("custom_exercises", {
+        name: form.name.trim(),
+        emoji: form.emoji || "💪",
+        muscle_group: form.muscle_group,
+        default_sets: form.default_sets || "3",
+        default_reps: form.default_reps || "10",
+        default_rest: form.default_rest || "90s",
+        video_url: form.video_url || null,
+        created_by: currentUser.id,
+      });
+      await loadCustomExercises();
+      resetForm();
+      setShowAdd(false);
+    } catch (e) {
+      setErr("Error al guardar: " + (e?.message || "desconocido"));
+    }
+    setSaving(false);
+  };
+
+  const deleteEx = async (id, name) => {
+    if (!confirm(`¿Eliminar "${name}"?`)) return;
+    try {
+      await sb.remove("custom_exercises", "id", id);
+      await loadCustomExercises();
+    } catch {}
+  };
+
+  const filtered = customExercises.filter(e => {
+    if (muscleFilter !== "all" && e.muscle_group !== muscleFilter) return false;
+    if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const fld = k => ({ value: form[k] || "", onChange: v => setForm(p => ({ ...p, [k]: v })) });
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+        <div style={{ fontSize: 20, fontWeight: 900, color: t.text }}>Ejercicios personalizados</div>
+        <button onClick={() => { setShowAdd(s => !s); resetForm(); }}
+          style={{ background: t.accentAlpha, border:`1.5px solid rgba(30,155,191,0.3)`, borderRadius:10, padding:"7px 14px", cursor:"pointer", color:t.accent, fontSize:12, fontWeight:700, fontFamily:"inherit" }}>
+          {showAdd ? "Cancelar" : "+ Añadir"}
+        </button>
+      </div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>Añade ejercicios propios para usarlos en rutinas (los {EXERCISE_DB.length} predefinidos ya están disponibles)</div>
+
+      {/* Add form */}
+      {showAdd && (
+        <Card accent style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 14 }}>NUEVO EJERCICIO</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "60px 1fr", gap: "0 12px" }}>
+            <Field label="EMOJI" {...fld("emoji")} placeholder="💪"/>
+            <Field label="NOMBRE" {...fld("name")} placeholder="ej: Press banca inclinado 30°"/>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>GRUPO MUSCULAR</div>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              {MUSCLE_GROUPS.map(mg => (
+                <button key={mg.key} onClick={() => setForm(p => ({ ...p, muscle_group: mg.key }))}
+                  style={{ background: form.muscle_group === mg.key ? `${mg.color}22` : t.bgElevated, border: `1.5px solid ${form.muscle_group === mg.key ? mg.color : t.border}`, borderRadius: 8, padding: "7px 10px", cursor: "pointer", color: form.muscle_group === mg.key ? mg.color : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                  {mg.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>VALORES POR DEFECTO</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            <Field label="SERIES" {...fld("default_sets")} placeholder="3"/>
+            <Field label="REPS" {...fld("default_reps")} placeholder="10"/>
+            <Field label="DESCANSO" {...fld("default_rest")} placeholder="90s"/>
+          </div>
+
+          {err && <div style={{ color: t.danger, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+
+          <Btn onClick={saveEx} disabled={saving} size="sm">
+            {saving ? "Guardando..." : "💾 Guardar ejercicio"}
+          </Btn>
+        </Card>
+      )}
+
+      {/* Search */}
+      {customExercises.length > 0 && (
+        <>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar ejercicio..."
+            style={{ width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "11px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", marginBottom: 10 }}/>
+          <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 8, marginBottom: 14, scrollbarWidth: "none" }}>
+            <button onClick={() => setMuscleFilter("all")}
+              style={{ background: muscleFilter === "all" ? t.accentAlpha : t.bgCard, border: `1.5px solid ${muscleFilter === "all" ? "rgba(30,155,191,0.35)" : t.border}`, borderRadius: 8, padding: "6px 11px", cursor: "pointer", color: muscleFilter === "all" ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+              Todos
+            </button>
+            {MUSCLE_GROUPS.map(mg => (
+              <button key={mg.key} onClick={() => setMuscleFilter(mg.key)}
+                style={{ background: muscleFilter === mg.key ? `${mg.color}22` : t.bgCard, border: `1.5px solid ${muscleFilter === mg.key ? mg.color : t.border}`, borderRadius: 8, padding: "6px 11px", cursor: "pointer", color: muscleFilter === mg.key ? mg.color : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+                {mg.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* List */}
+      {customExercises.length === 0 && !showAdd && (
+        <Empty icon="dumbbell" text="Aún no has añadido ejercicios personalizados"/>
+      )}
+
+      {filtered.map(ex => {
+        const mg = MUSCLE_GROUPS.find(m => m.key === ex.muscle_group);
+        return (
+          <Card key={ex.id} style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 11, background: t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0, borderLeft: mg ? `3px solid ${mg.color}` : "none" }}>{ex.emoji || "💪"}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{ex.name}</span>
+                  {mg && <span style={{ fontSize: 10, fontWeight: 700, color: mg.color, background: `${mg.color}22`, padding: "2px 6px", borderRadius: 6 }}>{mg.label}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: t.textSub }}>
+                  {ex.default_sets}×{ex.default_reps} · descanso {ex.default_rest}
+                </div>
+              </div>
+              <button onClick={() => deleteEx(ex.id, ex.name)}
+                style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.danger, flexShrink: 0 }}>
+                <Icon n="trash" s={14}/>
+              </button>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+};
+
 // ─── AdminFoods — manage custom food database ────────────────────────────────
 const AdminFoods = ({ onBack }) => {
   const { currentUser, customFoods, loadCustomFoods } = useApp();
@@ -2703,6 +2862,7 @@ const AdminApp = () => {
     if (view === "foods") return "🍽️ Alimentos";
     if (view === "basediets") return "🍴 Dietas base";
     if (view === "errors") return "🐛 Errores";
+    if (view === "exercises") return "💪 Ejercicios";
     return sel?.name;
   };
 
@@ -2751,7 +2911,7 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")} onBaseDiets={()=>setView("basediets")} onErrors={()=>setView("errors")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")} onBaseDiets={()=>setView("basediets")} onErrors={()=>setView("errors")} onExercises={()=>setView("exercises")}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")}/>}
@@ -2762,12 +2922,13 @@ const AdminApp = () => {
         {view === "foods"     && <AdminFoods onBack={() => setView("list")}/>}
         {view === "basediets" && <AdminBaseDiets onBack={() => setView("list")}/>}
         {view === "errors"    && <AdminErrors onBack={() => setView("list")}/>}
+        {view === "exercises" && <AdminExercises onBack={() => setView("list")}/>}
       </div>
     </div>
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods, onBaseDiets, onErrors }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods, onBaseDiets, onErrors, onExercises }) => {
   const { currentUser } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
@@ -2896,6 +3057,17 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       <div style={{ flex: 1 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Editar dietas base</div>
         <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Personalizar las plantillas Mujer 1800 y Hombre 3000</div>
+      </div>
+      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+    </button>
+
+    {/* Exercises button — all admins */}
+    <button onClick={onExercises}
+      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
+      <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>💪</div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar ejercicios</div>
+        <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Añadir ejercicios personalizados a la biblioteca</div>
       </div>
       <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
     </button>
@@ -3494,9 +3666,12 @@ ${rawText.slice(0, 6000)}`
 
 // ─── AEditRoutine ─────────────────────────────────────────────────────────────
 const AEditRoutine = ({ client, routine: init, db, setDb }) => {
+  const { customExercises } = useApp();
   const [r, setR] = useState(init||{name:"",days:[]});
   const [saved, setSaved] = useState(false);
+  const [showPickerFor, setShowPickerFor] = useState(null); // day index or null
   useEffect(() => { setR(init||{name:"",days:[]}); setSaved(false); }, [client.id]);
+
   const save = async () => {
     setDb(p=>({...p,routines:{...p.routines,[client.id]:r}}));
     setSaved(true); setTimeout(()=>setSaved(false),2000);
@@ -3505,13 +3680,39 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
   const addDay = () => setR(r=>({...r,days:[...r.days,{id:`d${Date.now()}`,name:"Nuevo Día",coachTip:"",exercises:[]}]}));
   const rmDay  = i => setR(r=>({...r,days:r.days.filter((_,j)=>j!==i)}));
   const setDayName = (i,v) => setR(r=>({...r,days:r.days.map((d,j)=>j===i?{...d,name:v}:d)}));
-  const addEx  = di => setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:[...d.exercises,{name:"",sets:3,reps:"10",rest:"90s",notes:""}]}:d)}));
+  const addExFromLib = (di, exDef) => {
+    setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:[...d.exercises,{
+      name: exDef.name, emoji: exDef.emoji || "💪", muscle: exDef.muscle_group || exDef.muscle,
+      sets: exDef.default_sets || exDef.sets || "3",
+      reps: exDef.default_reps || exDef.reps || "10",
+      rest: exDef.default_rest || exDef.rest || "90s",
+      notes: exDef.notes || "",
+    }]}:d)}));
+    setShowPickerFor(null);
+  };
+  const addExBlank = di => setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:[...d.exercises,{name:"",sets:"3",reps:"10",rest:"90s",notes:""}]}:d)}));
   const rmEx   = (di,ei) => setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:d.exercises.filter((_,j)=>j!==ei)}:d)}));
   const setEx  = (di,ei,k,v) => setR(r=>({...r,days:r.days.map((d,i)=>i!==di?d:{...d,exercises:d.exercises.map((e,j)=>j!==ei?e:{...e,[k]:v})})}));
   const si = { background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 10px", color: t.text, fontSize: 12, fontFamily: "inherit", outline: "none" };
 
+  // All exercises = built-in + custom
+  const ALL_EXERCISES = [
+    ...EXERCISE_DB.map(e => ({ ...e, muscle_group: e.muscle, default_sets: e.sets, default_reps: e.reps, default_rest: e.rest })),
+    ...(customExercises || []),
+  ];
+
   return (
     <div>
+      {/* Exercise Picker overlay */}
+      {showPickerFor !== null && (
+        <ExercisePicker
+          exercises={ALL_EXERCISES}
+          onSelect={exDef => addExFromLib(showPickerFor, exDef)}
+          onAddBlank={() => { addExBlank(showPickerFor); setShowPickerFor(null); }}
+          onClose={() => setShowPickerFor(null)}
+        />
+      )}
+
       {/* Word importer */}
       <WordImporter onImport={imported => setR(imported)}/>
 
@@ -3526,25 +3727,113 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
           <textarea value={day.coachTip||""} onChange={e=>setR(r=>({...r,days:r.days.map((d,j)=>j===di?{...d,coachTip:e.target.value}:d)}))}
             placeholder="💡 Recomendaciones del coach para este día..." rows={2}
             style={{...si,width:"100%",boxSizing:"border-box",resize:"vertical",marginBottom:10,padding:"8px 10px",fontSize:12,lineHeight:1.5}}/>
-          {day.exercises.map((ex,ei)=>(
-            <div key={ei} style={{background:t.bgElevated,borderRadius:10,padding:10,marginBottom:8}}>
-              <div style={{display:"flex",gap:8,marginBottom:8}}>
-                <input value={ex.name} onChange={e=>setEx(di,ei,"name",e.target.value)} placeholder="Nombre del ejercicio" style={{...si,flex:1}}/>
-                <button onClick={()=>rmEx(di,ei)} style={{background:"none",border:"none",cursor:"pointer",color:t.textDim,minWidth:44,minHeight:44,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon n="x" s={14}/></button>
+          {day.exercises.map((ex,ei)=>{
+            const muscleCfg = MUSCLE_GROUPS.find(m => m.key === ex.muscle);
+            return (
+              <div key={ei} style={{background:t.bgElevated,borderRadius:10,padding:10,marginBottom:8,borderLeft:muscleCfg?`3px solid ${muscleCfg.color}`:"none"}}>
+                <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+                  {ex.emoji && <span style={{fontSize:18}}>{ex.emoji}</span>}
+                  <input value={ex.name} onChange={e=>setEx(di,ei,"name",e.target.value)} placeholder="Nombre del ejercicio" style={{...si,flex:1}}/>
+                  <button onClick={()=>rmEx(di,ei)} style={{background:"none",border:"none",cursor:"pointer",color:t.textDim,minWidth:36,minHeight:36,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon n="x" s={14}/></button>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                  {[["Series","sets"],["Reps","reps"],["Descanso","rest"]].map(([lbl,k])=>(
+                    <div key={k}>
+                      <div style={{fontSize:9,color:t.textDim,fontWeight:700,marginBottom:3,textAlign:"center",letterSpacing:"0.05em"}}>{lbl.toUpperCase()}</div>
+                      <input value={ex[k]} onChange={e=>setEx(di,ei,k,e.target.value)} style={{...si,textAlign:"center",width:"100%",boxSizing:"border-box"}}/>
+                    </div>
+                  ))}
+                </div>
+                {/* Optional notes */}
+                <input value={ex.notes || ""} onChange={e => setEx(di,ei,"notes",e.target.value)}
+                  placeholder="Nota opcional (ej: peso 70kg, RIR 2...)"
+                  style={{...si, width: "100%", boxSizing: "border-box", marginTop: 6, fontSize: 11}}/>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-                {[["Series","sets"],["Reps","reps"],["Descanso","rest"]].map(([lbl,k])=>(
-                  <input key={k} value={ex[k]} onChange={e=>setEx(di,ei,k,e.target.value)} placeholder={lbl} style={{...si,textAlign:"center"}}/>
-                ))}
-              </div>
-            </div>
-          ))}
-          <Btn onClick={()=>addEx(di)} variant="text" size="sm"><Icon n="plus" s={13}/> Ejercicio</Btn>
+            );
+          })}
+          <div style={{display:"flex",gap:6,marginTop:6}}>
+            <Btn onClick={()=>setShowPickerFor(di)} variant="ghost" size="sm" style={{flex: 1}}>
+              <Icon n="plus" s={13}/> Añadir ejercicio
+            </Btn>
+          </div>
         </Card>
       ))}
       <div style={{display:"flex",gap:10,marginTop:4}}>
         <Btn onClick={addDay} variant="ghost" size="sm"><Icon n="plus" s={14}/> Día</Btn>
         <SaveBtn onSave={save} saved={saved}/>
+      </div>
+    </div>
+  );
+};
+
+// ─── ExercisePicker — search + filter by muscle group ────────────────────────
+const ExercisePicker = ({ exercises, onSelect, onAddBlank, onClose }) => {
+  const [search, setSearch] = useState("");
+  const [muscleFilter, setMuscleFilter] = useState("all");
+
+  const filtered = exercises.filter(e => {
+    if (muscleFilter !== "all" && e.muscle_group !== muscleFilter) return false;
+    if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(7,9,15,0.94)", zIndex: 1000, display: "flex", flexDirection: "column", padding: "40px 16px 16px" }}>
+      <div style={{ maxWidth: 430, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+        <button onClick={onClose}
+          style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", color: t.textSub, fontFamily: "inherit", fontSize: 13, fontWeight: 600, marginBottom: 14, padding: 0, alignSelf: "flex-start" }}>
+          <Icon n="back" s={16}/> Cerrar
+        </button>
+        <div style={{ fontSize: 20, fontWeight: 900, color: t.text, marginBottom: 12 }}>💪 Elegir ejercicio</div>
+
+        {/* Search */}
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar..." autoFocus
+          style={{ width: "100%", boxSizing: "border-box", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 16px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", marginBottom: 10 }}/>
+
+        {/* Muscle group filter */}
+        <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 8, marginBottom: 10, scrollbarWidth: "none" }}>
+          <button onClick={() => setMuscleFilter("all")}
+            style={{ background: muscleFilter === "all" ? t.accentAlpha : t.bgCard, border: `1.5px solid ${muscleFilter === "all" ? "rgba(30,155,191,0.35)" : t.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", color: muscleFilter === "all" ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+            Todos
+          </button>
+          {MUSCLE_GROUPS.map(mg => (
+            <button key={mg.key} onClick={() => setMuscleFilter(mg.key)}
+              style={{ background: muscleFilter === mg.key ? `${mg.color}22` : t.bgCard, border: `1.5px solid ${muscleFilter === mg.key ? mg.color : t.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", color: muscleFilter === mg.key ? mg.color : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 }}>
+              {mg.label}
+            </button>
+          ))}
+        </div>
+
+        {/* List */}
+        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 16 }}>
+          {filtered.length === 0 && (
+            <div style={{ textAlign: "center", color: t.textSub, padding: 30, fontSize: 13 }}>
+              Sin resultados para "{search}"
+            </div>
+          )}
+          {filtered.map((e, i) => {
+            const mg = MUSCLE_GROUPS.find(m => m.key === e.muscle_group);
+            return (
+              <button key={i} onClick={() => onSelect(e)}
+                style={{ width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "11px 13px", marginBottom: 6, display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left", borderLeft: mg ? `3px solid ${mg.color}` : `1.5px solid ${t.border}` }}>
+                <span style={{ fontSize: 18 }}>{e.emoji || "💪"}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name}</div>
+                  <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>
+                    {e.default_sets || e.sets}×{e.default_reps || e.reps} · {e.default_rest || e.rest}
+                  </div>
+                </div>
+                {mg && <span style={{ fontSize: 9, color: mg.color, background: `${mg.color}22`, padding: "2px 6px", borderRadius: 5, fontWeight: 700, whiteSpace: "nowrap" }}>{mg.label.split(" ")[1] || mg.label}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Manual blank */}
+        <button onClick={onAddBlank}
+          style={{ width: "100%", background: "none", border: `1px dashed ${t.border}`, borderRadius: 10, padding: "12px", cursor: "pointer", color: t.textSub, fontSize: 12, fontWeight: 600, fontFamily: "inherit", marginTop: 8 }}>
+          ✏️ Ejercicio personalizado (en blanco)
+        </button>
       </div>
     </div>
   );
@@ -3582,6 +3871,96 @@ const FOOD_DB = [
   { name:"Aguacate",           emoji:"🥑", prot:2,  fat:15, carb:8,  kcal:160, cat:"grasa" },
   { name:"Chocolate 85%",      emoji:"🍫", prot:9,  fat:45, carb:19, kcal:580, cat:"grasa" },
   { name:"Queso Havarti",      emoji:"🧀", prot:20, fat:30, carb:1,  kcal:350, cat:"grasa" },
+];
+
+// ─── Exercise database ────────────────────────────────────────────────────────
+const EXERCISE_DB = [
+  // Pecho
+  { name:"Press banca con barra",          emoji:"🏋️", muscle:"pecho",   sets:"4", reps:"8-10", rest:"90s" },
+  { name:"Press banca con mancuernas",     emoji:"🏋️", muscle:"pecho",   sets:"4", reps:"8-12", rest:"90s" },
+  { name:"Press inclinado con mancuernas", emoji:"🏋️", muscle:"pecho",   sets:"4", reps:"8-12", rest:"90s" },
+  { name:"Press declinado",                emoji:"🏋️", muscle:"pecho",   sets:"3", reps:"10",   rest:"90s" },
+  { name:"Aperturas en banca",             emoji:"💪", muscle:"pecho",   sets:"3", reps:"12",   rest:"60s" },
+  { name:"Aperturas en polea",             emoji:"💪", muscle:"pecho",   sets:"3", reps:"12-15", rest:"60s" },
+  { name:"Fondos en paralelas",            emoji:"💪", muscle:"pecho",   sets:"4", reps:"8-12", rest:"90s" },
+  { name:"Peck Deck (contractora)",        emoji:"💪", muscle:"pecho",   sets:"3", reps:"12-15", rest:"60s" },
+  { name:"Press en máquina Smith",         emoji:"🏋️", muscle:"pecho",   sets:"4", reps:"10",   rest:"90s" },
+  // Espalda
+  { name:"Dominadas",                      emoji:"🤸", muscle:"espalda", sets:"4", reps:"6-10", rest:"120s" },
+  { name:"Jalón al pecho polea alta",      emoji:"💪", muscle:"espalda", sets:"4", reps:"10-12", rest:"90s" },
+  { name:"Remo con barra",                 emoji:"🏋️", muscle:"espalda", sets:"4", reps:"8-10", rest:"90s" },
+  { name:"Remo con mancuerna a una mano",  emoji:"💪", muscle:"espalda", sets:"3", reps:"10-12", rest:"60s" },
+  { name:"Remo en polea baja",             emoji:"💪", muscle:"espalda", sets:"4", reps:"10-12", rest:"90s" },
+  { name:"Peso muerto convencional",       emoji:"🏋️", muscle:"espalda", sets:"4", reps:"5-8",  rest:"120s" },
+  { name:"Peso muerto rumano",             emoji:"🏋️", muscle:"espalda", sets:"4", reps:"8-10", rest:"90s" },
+  { name:"Remo T-bar",                     emoji:"🏋️", muscle:"espalda", sets:"4", reps:"10",   rest:"90s" },
+  { name:"Pullover con mancuerna",         emoji:"💪", muscle:"espalda", sets:"3", reps:"12",   rest:"60s" },
+  // Piernas
+  { name:"Sentadilla con barra",           emoji:"🏋️", muscle:"piernas", sets:"4", reps:"8-10", rest:"120s" },
+  { name:"Sentadilla frontal",             emoji:"🏋️", muscle:"piernas", sets:"4", reps:"8-10", rest:"120s" },
+  { name:"Prensa inclinada",               emoji:"🦵", muscle:"piernas", sets:"4", reps:"10-12", rest:"90s" },
+  { name:"Extensiones de cuádriceps",      emoji:"🦵", muscle:"piernas", sets:"3", reps:"12-15", rest:"60s" },
+  { name:"Curl femoral tumbado",           emoji:"🦵", muscle:"piernas", sets:"3", reps:"12",   rest:"60s" },
+  { name:"Curl femoral de pie",            emoji:"🦵", muscle:"piernas", sets:"3", reps:"12",   rest:"60s" },
+  { name:"Zancadas con mancuernas",        emoji:"🦵", muscle:"piernas", sets:"3", reps:"12/lado", rest:"90s" },
+  { name:"Sentadilla búlgara",             emoji:"🦵", muscle:"piernas", sets:"3", reps:"10/lado", rest:"90s" },
+  { name:"Hack squat",                     emoji:"🏋️", muscle:"piernas", sets:"4", reps:"10",   rest:"90s" },
+  { name:"Gemelos de pie",                 emoji:"🦵", muscle:"piernas", sets:"4", reps:"15-20", rest:"45s" },
+  { name:"Gemelos sentado",                emoji:"🦵", muscle:"piernas", sets:"4", reps:"15-20", rest:"45s" },
+  // Glúteos
+  { name:"Hip Thrust con barra",           emoji:"🍑", muscle:"gluteos", sets:"4", reps:"10-12", rest:"90s" },
+  { name:"Hip Thrust con mancuerna",       emoji:"🍑", muscle:"gluteos", sets:"4", reps:"12",   rest:"60s" },
+  { name:"Patada de glúteo en polea",      emoji:"🍑", muscle:"gluteos", sets:"3", reps:"12-15", rest:"60s" },
+  { name:"Puente de glúteos",              emoji:"🍑", muscle:"gluteos", sets:"3", reps:"15",   rest:"45s" },
+  { name:"Abducción de cadera en máquina", emoji:"🍑", muscle:"gluteos", sets:"3", reps:"15",   rest:"45s" },
+  { name:"Peso muerto sumo",               emoji:"🏋️", muscle:"gluteos", sets:"4", reps:"8-10", rest:"90s" },
+  { name:"Glute kickback con tobillera",   emoji:"🍑", muscle:"gluteos", sets:"3", reps:"15/lado", rest:"45s" },
+  { name:"Step-up con mancuernas",         emoji:"🍑", muscle:"gluteos", sets:"3", reps:"12/lado", rest:"60s" },
+  // Hombro
+  { name:"Press militar con barra",        emoji:"🏋️", muscle:"hombro",  sets:"4", reps:"8-10", rest:"90s" },
+  { name:"Press militar con mancuernas",   emoji:"🏋️", muscle:"hombro",  sets:"4", reps:"10",   rest:"90s" },
+  { name:"Elevaciones laterales",          emoji:"💪", muscle:"hombro",  sets:"4", reps:"12-15", rest:"45s" },
+  { name:"Elevaciones frontales",          emoji:"💪", muscle:"hombro",  sets:"3", reps:"12",   rest:"45s" },
+  { name:"Pájaros (pose prone reverse)",   emoji:"💪", muscle:"hombro",  sets:"3", reps:"12-15", rest:"45s" },
+  { name:"Face pull en polea",             emoji:"💪", muscle:"hombro",  sets:"3", reps:"15",   rest:"45s" },
+  { name:"Remo al mentón",                 emoji:"💪", muscle:"hombro",  sets:"3", reps:"10-12", rest:"60s" },
+  // Brazo
+  { name:"Curl bíceps con barra",          emoji:"💪", muscle:"brazo",   sets:"4", reps:"10",   rest:"60s" },
+  { name:"Curl bíceps con mancuernas",     emoji:"💪", muscle:"brazo",   sets:"3", reps:"12",   rest:"60s" },
+  { name:"Curl martillo",                  emoji:"💪", muscle:"brazo",   sets:"3", reps:"12",   rest:"60s" },
+  { name:"Curl predicador",                emoji:"💪", muscle:"brazo",   sets:"3", reps:"10-12", rest:"60s" },
+  { name:"Curl bíceps en polea",           emoji:"💪", muscle:"brazo",   sets:"3", reps:"12-15", rest:"45s" },
+  { name:"Press francés tumbado",          emoji:"💪", muscle:"brazo",   sets:"3", reps:"10-12", rest:"60s" },
+  { name:"Extensiones tríceps polea",      emoji:"💪", muscle:"brazo",   sets:"3", reps:"12-15", rest:"45s" },
+  { name:"Tríceps cuerda en polea",        emoji:"💪", muscle:"brazo",   sets:"3", reps:"12-15", rest:"45s" },
+  { name:"Fondos de tríceps en banco",     emoji:"💪", muscle:"brazo",   sets:"3", reps:"12",   rest:"60s" },
+  // Core
+  { name:"Plancha abdominal",              emoji:"🧘", muscle:"core",    sets:"3", reps:"30-60s", rest:"30s" },
+  { name:"Plancha lateral",                emoji:"🧘", muscle:"core",    sets:"3", reps:"30s/lado", rest:"30s" },
+  { name:"Crunch abdominal",               emoji:"🧘", muscle:"core",    sets:"3", reps:"15-20", rest:"30s" },
+  { name:"Elevación de piernas colgado",   emoji:"🧘", muscle:"core",    sets:"3", reps:"12-15", rest:"45s" },
+  { name:"Rueda abdominal (ab wheel)",     emoji:"🧘", muscle:"core",    sets:"3", reps:"10-12", rest:"60s" },
+  { name:"Crunch en polea alta",           emoji:"🧘", muscle:"core",    sets:"3", reps:"15",   rest:"45s" },
+  { name:"Mountain climbers",              emoji:"🧘", muscle:"core",    sets:"3", reps:"30s",  rest:"30s" },
+  // Cardio
+  { name:"Cinta — caminata inclinada",     emoji:"🏃", muscle:"cardio",  sets:"1", reps:"30min", rest:"-" },
+  { name:"Cinta — running continuo",       emoji:"🏃", muscle:"cardio",  sets:"1", reps:"20-30min", rest:"-" },
+  { name:"Bicicleta estática",             emoji:"🚴", muscle:"cardio",  sets:"1", reps:"30min", rest:"-" },
+  { name:"Elíptica",                       emoji:"🏃", muscle:"cardio",  sets:"1", reps:"25-30min", rest:"-" },
+  { name:"HIIT (30s/30s)",                 emoji:"🏃", muscle:"cardio",  sets:"10", reps:"30s", rest:"30s" },
+  { name:"Stepper",                        emoji:"🏃", muscle:"cardio",  sets:"1", reps:"20-30min", rest:"-" },
+];
+
+const MUSCLE_GROUPS = [
+  { key: "pecho",   label: "🏋️ Pecho",  color: "#e05a5a" },
+  { key: "espalda", label: "💪 Espalda", color: "#5a8ae0" },
+  { key: "piernas", label: "🦵 Piernas", color: "#f0a030" },
+  { key: "gluteos", label: "🍑 Glúteos", color: "#e05a8a" },
+  { key: "hombro",  label: "💪 Hombro", color: "#a78bfa" },
+  { key: "brazo",   label: "💪 Brazo",  color: "#14b8a6" },
+  { key: "core",    label: "🧘 Core",   color: "#8ac942" },
+  { key: "cardio",  label: "🏃 Cardio", color: "#06b6d4" },
+  { key: "otro",    label: "💪 Otro",   color: "#6b8ea8" },
 ];
 
 // ─── MacroCalculator — inline food picker ────────────────────────────────────
@@ -5917,6 +6296,7 @@ export default function App() {
   const [appReady, setAppReady] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [customFoods, setCustomFoods] = useState([]);
+  const [customExercises, setCustomExercises] = useState([]);
 
   // Ensure viewport is set correctly for mobile (no pinch-zoom-out needed)
   useEffect(() => {
@@ -5947,6 +6327,13 @@ export default function App() {
     } catch {}
   }, []);
 
+  const loadCustomExercises = useCallback(async () => {
+    try {
+      const rows = await sb.select("custom_exercises", "?order=name");
+      if (rows) setCustomExercises(rows);
+    } catch {}
+  }, []);
+
   const loadFromSupabase = useCallback(async () => {
     setSyncing(true);
     setLoadError(false);
@@ -5960,12 +6347,13 @@ export default function App() {
       ]);
       setDb(prev => mergeSupabaseIntoDb(prev, { clients, weights, notes, clientData, checkins }));
       await loadCustomFoods();
+      await loadCustomExercises();
     } catch (e) {
       console.error("Supabase load error:", e);
       setLoadError(true);
     }
     setSyncing(false);
-  }, [loadCustomFoods]);
+  }, [loadCustomFoods, loadCustomExercises]);
 
   // Initial load on mount
   useEffect(() => {
@@ -6045,7 +6433,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods }}>
+      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises }}>
         <GlobalStyles/>
         {!currentUser
           ? <Login/>
