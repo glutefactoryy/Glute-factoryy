@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.8";
+const APP_VERSION = "5.5.10";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1221,34 +1221,64 @@ const RoutineDayDetail = ({ day, dayIndex, totalDays, onBack }) => (
 
     {/* Exercise list */}
     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-      {day.exercises.map((ex, j) => (
-        <div key={j} style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "flex-start", gap: 14 }}>
-          {/* Index */}
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
-            <span style={{ fontSize: 12, fontWeight: 800, color: t.textSub }}>{j + 1}</span>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: t.text, marginBottom: 6 }}>{ex.name}</div>
-            {/* Series / Reps / Rest chips */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: ex.notes ? 8 : 0 }}>
-              <span style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.2)`, borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: t.accent }}>
-                {ex.sets} series
-              </span>
-              <span style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.2)`, borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: t.accent }}>
-                {ex.reps} reps
-              </span>
-              <span style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 600, color: t.textSub }}>
-                ⏱ {ex.rest}
-              </span>
+      {day.exercises.map((ex, j) => {
+        const detailed = ex.setsList && ex.setsList.length > 0;
+        return (
+          <div key={j} style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "flex-start", gap: 14 }}>
+            {/* Index */}
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: t.textSub }}>{j + 1}</span>
             </div>
-            {ex.notes && (
-              <div style={{ fontSize: 12, color: t.textSub, lineHeight: 1.5, fontStyle: "italic" }}>
-                💬 {ex.notes}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: t.text, marginBottom: 8 }}>
+                {ex.emoji ? `${ex.emoji} ` : ""}{ex.name}
               </div>
-            )}
+
+              {detailed ? (
+                // Detailed sets table
+                <div style={{ marginBottom: ex.notes ? 8 : 0 }}>
+                  <div style={{ background: t.bgElevated, borderRadius: 10, padding: "6px 10px", marginBottom: 6 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 1fr", gap: 8, fontSize: 9, fontWeight: 700, color: t.textDim, letterSpacing: "0.05em", marginBottom: 4, paddingBottom: 4, borderBottom: `1px solid ${t.border}` }}>
+                      <div style={{ textAlign: "center" }}>Nº</div>
+                      <div style={{ textAlign: "center" }}>REPS</div>
+                      <div style={{ textAlign: "center" }}>RIR / PESO</div>
+                    </div>
+                    {ex.setsList.map((s, idx) => (
+                      <div key={s.id || idx} style={{ display: "grid", gridTemplateColumns: "28px 1fr 1fr", gap: 8, padding: "4px 0", borderBottom: idx < ex.setsList.length - 1 ? `1px solid rgba(255,255,255,0.04)` : "none" }}>
+                        <div style={{ textAlign: "center", fontSize: 11, fontWeight: 900, color: t.accent }}>{idx + 1}</div>
+                        <div style={{ textAlign: "center", fontSize: 12, fontWeight: 700, color: t.text }}>{s.reps}</div>
+                        <div style={{ textAlign: "center", fontSize: 12, fontWeight: 600, color: s.rir ? t.text : t.textDim }}>{s.rir || "—"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <span style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 20, padding: "4px 10px", fontSize: 11, fontWeight: 600, color: t.textSub, display: "inline-block" }}>
+                    ⏱ Descanso {ex.rest}
+                  </span>
+                </div>
+              ) : (
+                // Simple chips (legacy)
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: ex.notes ? 8 : 0 }}>
+                  <span style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.2)`, borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: t.accent }}>
+                    {ex.sets} series
+                  </span>
+                  <span style={{ background: t.accentAlpha, border: `1px solid rgba(30,155,191,0.2)`, borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: t.accent }}>
+                    {ex.reps} reps
+                  </span>
+                  <span style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 20, padding: "4px 10px", fontSize: 12, fontWeight: 600, color: t.textSub }}>
+                    ⏱ {ex.rest}
+                  </span>
+                </div>
+              )}
+
+              {ex.notes && (
+                <div style={{ fontSize: 12, color: t.textSub, lineHeight: 1.5, fontStyle: "italic" }}>
+                  💬 {ex.notes}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
 
     {/* Coach tip */}
@@ -3359,7 +3389,6 @@ const AEditProfile = ({ client, db, setDb }) => {
 
   const save = async () => {
     const vErr = validateAll([
-      validateEmail(f.email, { required: true }),
       validateAge(f.age),
       validateHeight(f.height),
       validatePhone(f.phone),
@@ -3680,19 +3709,59 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
   const addDay = () => setR(r=>({...r,days:[...r.days,{id:`d${Date.now()}`,name:"Nuevo Día",coachTip:"",exercises:[]}]}));
   const rmDay  = i => setR(r=>({...r,days:r.days.filter((_,j)=>j!==i)}));
   const setDayName = (i,v) => setR(r=>({...r,days:r.days.map((d,j)=>j===i?{...d,name:v}:d)}));
+  // Helper — generate list of detailed series from default values
+  const makeSetsList = (numSets, reps, rir = "") => {
+    const n = parseInt(numSets) || 3;
+    const arr = [];
+    for (let i = 0; i < n; i++) {
+      arr.push({ id: "s" + Date.now() + "_" + i + "_" + Math.random().toString(36).slice(2, 5), reps: String(reps || "10"), rir: rir });
+    }
+    return arr;
+  };
+
   const addExFromLib = (di, exDef) => {
+    const numSets = exDef.default_sets || exDef.sets || "3";
+    const reps = exDef.default_reps || exDef.reps || "10";
     setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:[...d.exercises,{
       name: exDef.name, emoji: exDef.emoji || "💪", muscle: exDef.muscle_group || exDef.muscle,
-      sets: exDef.default_sets || exDef.sets || "3",
-      reps: exDef.default_reps || exDef.reps || "10",
+      sets: numSets, reps: reps,
       rest: exDef.default_rest || exDef.rest || "90s",
       notes: exDef.notes || "",
+      setsList: makeSetsList(numSets, reps, ""),
     }]}:d)}));
     setShowPickerFor(null);
   };
-  const addExBlank = di => setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:[...d.exercises,{name:"",sets:"3",reps:"10",rest:"90s",notes:""}]}:d)}));
+  const addExBlank = di => setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:[...d.exercises,{name:"",sets:"3",reps:"10",rest:"90s",notes:"",setsList:makeSetsList("3","10","")}]}:d)}));
   const rmEx   = (di,ei) => setR(r=>({...r,days:r.days.map((d,i)=>i===di?{...d,exercises:d.exercises.filter((_,j)=>j!==ei)}:d)}));
   const setEx  = (di,ei,k,v) => setR(r=>({...r,days:r.days.map((d,i)=>i!==di?d:{...d,exercises:d.exercises.map((e,j)=>j!==ei?e:{...e,[k]:v})})}));
+
+  // setsList operations
+  const addSet = (di, ei) => setR(r=>({...r,days:r.days.map((d,i)=>i!==di?d:{...d,exercises:d.exercises.map((e,j)=>{
+    if (j !== ei) return e;
+    const list = e.setsList || [];
+    const last = list[list.length - 1] || { reps: e.reps || "10", rir: "" };
+    const newSet = { id: "s" + Date.now() + "_" + Math.random().toString(36).slice(2, 5), reps: last.reps, rir: last.rir };
+    return { ...e, setsList: [...list, newSet] };
+  })})}));
+  const rmSet = (di, ei, sid) => setR(r=>({...r,days:r.days.map((d,i)=>i!==di?d:{...d,exercises:d.exercises.map((e,j)=>{
+    if (j !== ei) return e;
+    return { ...e, setsList: (e.setsList || []).filter(s => s.id !== sid) };
+  })})}));
+  const updSet = (di, ei, sid, k, v) => setR(r=>({...r,days:r.days.map((d,i)=>i!==di?d:{...d,exercises:d.exercises.map((e,j)=>{
+    if (j !== ei) return e;
+    return { ...e, setsList: (e.setsList || []).map(s => s.id === sid ? { ...s, [k]: v } : s) };
+  })})}));
+  // Toggle between simple and detailed modes
+  const toggleDetailed = (di, ei) => setR(r=>({...r,days:r.days.map((d,i)=>i!==di?d:{...d,exercises:d.exercises.map((e,j)=>{
+    if (j !== ei) return e;
+    if (e.setsList && e.setsList.length > 0) {
+      // Currently detailed → go back to simple
+      return { ...e, setsList: null };
+    } else {
+      // Currently simple → generate detailed from sets+reps
+      return { ...e, setsList: makeSetsList(e.sets || "3", e.reps || "10", "") };
+    }
+  })})}));
   const si = { background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 10px", color: t.text, fontSize: 12, fontFamily: "inherit", outline: "none" };
 
   // All exercises = built-in + custom
@@ -3729,6 +3798,7 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
             style={{...si,width:"100%",boxSizing:"border-box",resize:"vertical",marginBottom:10,padding:"8px 10px",fontSize:12,lineHeight:1.5}}/>
           {day.exercises.map((ex,ei)=>{
             const muscleCfg = MUSCLE_GROUPS.find(m => m.key === ex.muscle);
+            const detailed = ex.setsList && ex.setsList.length > 0;
             return (
               <div key={ei} style={{background:t.bgElevated,borderRadius:10,padding:10,marginBottom:8,borderLeft:muscleCfg?`3px solid ${muscleCfg.color}`:"none"}}>
                 <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
@@ -3736,17 +3806,62 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
                   <input value={ex.name} onChange={e=>setEx(di,ei,"name",e.target.value)} placeholder="Nombre del ejercicio" style={{...si,flex:1}}/>
                   <button onClick={()=>rmEx(di,ei)} style={{background:"none",border:"none",cursor:"pointer",color:t.textDim,minWidth:36,minHeight:36,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon n="x" s={14}/></button>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-                  {[["Series","sets"],["Reps","reps"],["Descanso","rest"]].map(([lbl,k])=>(
-                    <div key={k}>
-                      <div style={{fontSize:9,color:t.textDim,fontWeight:700,marginBottom:3,textAlign:"center",letterSpacing:"0.05em"}}>{lbl.toUpperCase()}</div>
-                      <input value={ex[k]} onChange={e=>setEx(di,ei,k,e.target.value)} style={{...si,textAlign:"center",width:"100%",boxSizing:"border-box"}}/>
+
+                {detailed ? (
+                  // Detailed mode: per-set reps/RIR
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "36px 1fr 1fr 32px", gap: 6, marginBottom: 4, fontSize: 9, color: t.textDim, fontWeight: 700, letterSpacing: "0.05em", textAlign: "center", alignItems: "center" }}>
+                      <div>Nº</div><div>REPS</div><div>RIR/PESO</div><div></div>
                     </div>
-                  ))}
-                </div>
+                    {ex.setsList.map((s, idx) => (
+                      <div key={s.id} style={{ display: "grid", gridTemplateColumns: "36px 1fr 1fr 32px", gap: 6, marginBottom: 5, alignItems: "center" }}>
+                        <div style={{ background: muscleCfg ? `${muscleCfg.color}22` : t.accentAlpha, color: muscleCfg ? muscleCfg.color : t.accent, borderRadius: 6, padding: "10px 0", textAlign: "center", fontSize: 13, fontWeight: 900, height: 40, display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box" }}>{idx + 1}</div>
+                        <input value={s.reps} onChange={e => updSet(di, ei, s.id, "reps", e.target.value)} placeholder="10"
+                          style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "0 6px", color: t.text, fontFamily: "inherit", outline: "none", textAlign: "center", height: 40, width: "100%", boxSizing: "border-box", minWidth: 0 }}/>
+                        <input value={s.rir || ""} onChange={e => updSet(di, ei, s.id, "rir", e.target.value)} placeholder="—"
+                          style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "0 6px", color: t.text, fontFamily: "inherit", outline: "none", textAlign: "center", height: 40, width: "100%", boxSizing: "border-box", minWidth: 0 }}/>
+                        <button onClick={() => rmSet(di, ei, s.id)} disabled={ex.setsList.length <= 1}
+                          style={{ background: "none", border: "none", cursor: ex.setsList.length <= 1 ? "not-allowed" : "pointer", color: t.textDim, padding: 0, opacity: ex.setsList.length <= 1 ? 0.3 : 1, display: "flex", alignItems: "center", justifyContent: "center", height: 40 }}>
+                          <Icon n="x" s={13}/>
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={() => addSet(di, ei)}
+                      style={{ width: "100%", background: "none", border: `1px dashed ${t.border}`, borderRadius: 8, padding: "9px", cursor: "pointer", color: t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit", marginTop: 6, marginBottom: 8 }}>
+                      + Añadir serie
+                    </button>
+                    {/* Rest */}
+                    <div style={{ marginBottom: 4 }}>
+                      <div style={{fontSize:9,color:t.textDim,fontWeight:700,marginBottom:4,textAlign:"center",letterSpacing:"0.05em"}}>DESCANSO ENTRE SERIES</div>
+                      <input value={ex.rest} onChange={e=>setEx(di,ei,"rest",e.target.value)} placeholder="90s"
+                        style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "0 6px", color: t.text, fontFamily: "inherit", outline: "none", textAlign: "center", height: 40, width: "100%", boxSizing: "border-box" }}/>
+                    </div>
+                    <button onClick={() => toggleDetailed(di, ei)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: t.accent, fontSize: 11, fontWeight: 700, fontFamily: "inherit", marginTop: 6, padding: "4px 0" }}>
+                      ← Modo simple
+                    </button>
+                  </>
+                ) : (
+                  // Simple mode: classic 3 fields
+                  <>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                      {[["Series","sets"],["Reps","reps"],["Descanso","rest"]].map(([lbl,k])=>(
+                        <div key={k}>
+                          <div style={{fontSize:9,color:t.textDim,fontWeight:700,marginBottom:3,textAlign:"center",letterSpacing:"0.05em"}}>{lbl.toUpperCase()}</div>
+                          <input value={ex[k]} onChange={e=>setEx(di,ei,k,e.target.value)} style={{...si,textAlign:"center",width:"100%",boxSizing:"border-box"}}/>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => toggleDetailed(di, ei)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: t.accent, fontSize: 10, fontWeight: 700, fontFamily: "inherit", marginTop: 6, padding: "4px 0" }}>
+                      ✎ Detallar cada serie →
+                    </button>
+                  </>
+                )}
+
                 {/* Optional notes */}
                 <input value={ex.notes || ""} onChange={e => setEx(di,ei,"notes",e.target.value)}
-                  placeholder="Nota opcional (ej: peso 70kg, RIR 2...)"
+                  placeholder="Nota general del ejercicio (técnica, recordatorio...)"
                   style={{...si, width: "100%", boxSizing: "border-box", marginTop: 6, fontSize: 11}}/>
               </div>
             );
@@ -4912,12 +5027,10 @@ const ANewClient = ({ db, setDb, onDone }) => {
 
   const create = async () => {
     if(!f.name||!f.email||!f.password) return alert("Nombre, usuario y contraseña son obligatorios");
-    const emailErr = validateEmail(f.email, { required: true });
-    if (emailErr) return alert(emailErr);
     if (f.password.length < 6) return alert("La contraseña debe tener al menos 6 caracteres");
-    // Check for duplicate email
+    // Check for duplicate username
     if (db.clients.some(c => c.email?.toLowerCase() === f.email.toLowerCase().trim())) {
-      return alert("Ya existe un cliente con este email");
+      return alert("Ya existe un cliente con este nombre de usuario");
     }
     const id="c"+Date.now(), uid="u"+Date.now();
     const startDate = new Date().toISOString().slice(0,10);
@@ -5504,6 +5617,38 @@ const getCalWeekRange = (date = new Date()) => {
   return `Lun ${fmtDay(mon)} – Dom ${fmtDay(sun)}`;
 };
 
+// Check-in window: Saturday of week → Wednesday of next week (5 days)
+// Returns { open: bool, status: "before" | "open" | "closed", openDate: Date, closeDate: Date }
+const getCheckinWindow = (weekKey, now = new Date()) => {
+  // weekKey format: "YYYY-WW" — find the Monday of that week
+  const [yearStr, weekStr] = weekKey.split("-");
+  const year = parseInt(yearStr);
+  const week = parseInt(weekStr);
+  // Calculate Monday of that week
+  const startOfYear = new Date(year, 0, 1);
+  const dayOffset = startOfYear.getDay() === 0 ? 1 : 8 - startOfYear.getDay();
+  const firstMonday = new Date(year, 0, dayOffset === 1 ? 1 : dayOffset);
+  if (startOfYear.getDay() === 1) firstMonday.setDate(1);
+  const monday = new Date(firstMonday);
+  monday.setDate(firstMonday.getDate() + (week - 1) * 7);
+  // Saturday of that week (window opens)
+  const saturday = new Date(monday);
+  saturday.setDate(monday.getDate() + 5);
+  saturday.setHours(0, 0, 0, 0);
+  // Wednesday of next week, end of day (window closes)
+  const wednesdayNext = new Date(monday);
+  wednesdayNext.setDate(monday.getDate() + 9);
+  wednesdayNext.setHours(23, 59, 59, 999);
+  if (now < saturday) return { open: false, status: "before", openDate: saturday, closeDate: wednesdayNext };
+  if (now > wednesdayNext) return { open: false, status: "closed", openDate: saturday, closeDate: wednesdayNext };
+  return { open: true, status: "open", openDate: saturday, closeDate: wednesdayNext };
+};
+
+const fmtCheckinDate = d => {
+  const days = ["dom","lun","mar","mié","jue","vie","sáb"];
+  return `${days[d.getDay()]} ${d.getDate()}/${d.getMonth()+1}`;
+};
+
 // ─── SliderField ──────────────────────────────────────────────────────────────
 const SliderField = ({ label, value, onChange, min = 0, max = 100, step = 1, leftLabel, rightLabel, unit = "%" }) => (
   <div style={{ marginBottom: 22 }}>
@@ -5995,6 +6140,10 @@ const CTracking = ({ client, db, setDb }) => {
   const thisWeekDone = !!checkins[thisWeekKey];
   const lastWeekDone = !!checkins[lastWeekKey];
 
+  // Check window state for the current week
+  const thisWeekWin = getCheckinWindow(thisWeekKey);
+  const lastWeekWin = getCheckinWindow(lastWeekKey);
+
   // All weeks with checkins + current/last
   const allKeys = [...new Set([
     ...Object.keys(checkins),
@@ -6011,27 +6160,51 @@ const CTracking = ({ client, db, setDb }) => {
 
   return (
     <div>
-      {/* Week selector — show when no week selected and current week not done */}
-      {!selectedWeek && !thisWeekDone && (
+      {/* Window-closed banner — show when nothing to fill */}
+      {!selectedWeek && !thisWeekDone && !thisWeekWin.open && lastWeekDone && (
+        <Card style={{ marginBottom: 16, background: "rgba(240,160,48,0.08)", border: "1.5px solid rgba(240,160,48,0.25)" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <div style={{ fontSize: 24, flexShrink: 0 }}>⏳</div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#f0a030", marginBottom: 4 }}>
+                {thisWeekWin.status === "before" ? "Aún no toca el check-in" : "Ventana cerrada"}
+              </div>
+              <div style={{ fontSize: 12, color: t.textSub, lineHeight: 1.5 }}>
+                {thisWeekWin.status === "before"
+                  ? `Podrás rellenar el check-in de esta semana a partir del ${fmtCheckinDate(thisWeekWin.openDate)} (sábado).`
+                  : `La ventana del check-in cerró el ${fmtCheckinDate(thisWeekWin.closeDate)}.`}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Week selector — show when no week selected and current week not done AND window open */}
+      {!selectedWeek && !thisWeekDone && (thisWeekWin.open || (!lastWeekDone && lastWeekWin.open)) && (
         <Card accent style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: t.text, marginBottom: 4 }}>¿De qué semana es este check-in?</div>
           <div style={{ fontSize: 12, color: t.textSub, marginBottom: 14 }}>Elige la semana que quieres registrar.</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <button onClick={() => { setSelectedWeek(thisWeekKey); setOpenWeek(thisWeekKey); }}
-              style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 20 }}>📅</span>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: t.accent }}>Esta semana</div>
-                <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{getCalWeekRange(new Date())}</div>
-              </div>
-            </button>
-            {!lastWeekDone && (
+            {thisWeekWin.open && (
+              <button onClick={() => { setSelectedWeek(thisWeekKey); setOpenWeek(thisWeekKey); }}
+                style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 20 }}>📅</span>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: t.accent }}>Esta semana</div>
+                  <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{getCalWeekRange(new Date())}</div>
+                </div>
+              </button>
+            )}
+            {!lastWeekDone && lastWeekWin.open && (
               <button onClick={() => { setSelectedWeek(lastWeekKey); setOpenWeek(lastWeekKey); }}
                 style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
                 <span style={{ fontSize: 20 }}>📆</span>
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Semana pasada</div>
-                  <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>{getCalWeekRange(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))}</div>
+                  <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>
+                    {getCalWeekRange(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))}
+                    <span style={{ color: "#f0a030", fontWeight: 600, marginLeft: 4 }}>· cierra {fmtCheckinDate(lastWeekWin.closeDate)}</span>
+                  </div>
                 </div>
               </button>
             )}
