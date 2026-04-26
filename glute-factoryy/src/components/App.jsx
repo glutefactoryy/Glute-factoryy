@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.14";
+const APP_VERSION = "5.5.14.1";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1640,7 +1640,7 @@ const CNotes = ({ client, notes }) => (
 );
 
 // ─── AdminSettings — change password/username ─────────────────────────────────
-const AdminSettings = ({ onBack, onChangelog, onAdmins, isSuperAdmin }) => {
+const AdminSettings = ({ onBack, onChangelog, onAdmins, onPaymentSettings, isSuperAdmin }) => {
   const { currentUser, db, setDb, setCurrentUser, logout } = useApp();
   const [name, setName] = useState(currentUser.name);
   const [email, setEmail] = useState(currentUser.email);
@@ -1694,6 +1694,17 @@ const AdminSettings = ({ onBack, onChangelog, onAdmins, isSuperAdmin }) => {
             </div>
             <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
           </button>
+          {onPaymentSettings && (
+            <button onClick={onPaymentSettings}
+              style={{ marginBottom: 8, width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>💼</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Configuración de pagos</div>
+                <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Destinatarios y formas de pago</div>
+              </div>
+              <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+            </button>
+          )}
         </>
       )}
 
@@ -2437,21 +2448,32 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
     price: existingSub.price || PLAN_PRICES[existingSub.plan_type] || 50,
     start_date: existingSub.start_date || today,
     last_payment_date: existingSub.last_payment_date || today,
+    paid_to: "",
+    payment_method: "",
   } : {
     plan_type: "mensual",
     price: PLAN_PRICES.mensual,
     start_date: today,
     last_payment_date: today,
+    paid_to: "",
+    payment_method: "",
   });
   const [history, setHistory] = useState([]);
   const [saving, setSaving] = useState(false);
   const [showRegisterPayment, setShowRegisterPayment] = useState(false);
+  const [recipients, setRecipients] = useState([]);
+  const [methods, setMethods] = useState([]);
 
   useEffect(() => {
     (async () => {
       try {
         const rows = await sb.select("payment_history", `?client_id=eq.${client.id}&order=payment_date.desc`);
         setHistory(rows || []);
+      } catch {}
+      try {
+        const settings = await sb.select("payment_settings", "?active=eq.true&order=display_order");
+        setRecipients((settings || []).filter(s => s.type === "recipient"));
+        setMethods((settings || []).filter(s => s.type === "method"));
       } catch {}
     })();
   }, [client.id]);
@@ -2505,6 +2527,8 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
         is_first_payment: isFirst,
         captador_id: client.captador_id || null,
         entrenador_id: client.entrenador_id || null,
+        paid_to: form.paid_to || null,
+        payment_method: form.payment_method || null,
         created_by: currentUser?.id || null,
       });
 
@@ -2604,6 +2628,44 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
             style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}/>
         </div>
 
+        {/* Paid to */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>💼 PAGADO A</div>
+          {recipients.length === 0 ? (
+            <div style={{ background: "rgba(240,160,48,0.08)", border: "1.5px solid rgba(240,160,48,0.25)", borderRadius: 10, padding: "10px 12px", fontSize: 11, color: "#f0a030" }}>
+              ⚠️ No hay destinatarios configurados. Configúralos en Ajustes → Configuración de pagos.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {recipients.map(r => (
+                <button key={r.id} onClick={() => setField("paid_to", form.paid_to === r.label ? "" : r.label)}
+                  style={{ background: form.paid_to === r.label ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${form.paid_to === r.label ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 8, padding: "9px 14px", cursor: "pointer", color: form.paid_to === r.label ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Payment method */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>💳 FORMA DE PAGO</div>
+          {methods.length === 0 ? (
+            <div style={{ background: "rgba(240,160,48,0.08)", border: "1.5px solid rgba(240,160,48,0.25)", borderRadius: 10, padding: "10px 12px", fontSize: 11, color: "#f0a030" }}>
+              ⚠️ No hay métodos de pago configurados. Configúralos en Ajustes → Configuración de pagos.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {methods.map(m => (
+                <button key={m.id} onClick={() => setField("payment_method", form.payment_method === m.label ? "" : m.label)}
+                  style={{ background: form.payment_method === m.label ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${form.payment_method === m.label ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 8, padding: "9px 14px", cursor: "pointer", color: form.payment_method === m.label ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div style={{ background: t.bgElevated, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: t.textSub, marginBottom: 4 }}>
           📅 Próxima renovación: <strong style={{ color: t.text }}>{fmtDate(next_renewal)}</strong>
         </div>
@@ -2669,12 +2731,141 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
                   <div style={{ fontSize: 10, color: t.textSub, marginTop: 2 }}>
                     Periodo: {fmtDate(p.period_start)} → {fmtDate(p.period_end)}
                   </div>
+                  {(p.paid_to || p.payment_method) && (
+                    <div style={{ fontSize: 10, color: t.textDim, marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {p.paid_to && <span>💼 {p.paid_to}</span>}
+                      {p.payment_method && <span>💳 {p.payment_method}</span>}
+                    </div>
+                  )}
                 </div>
                 <div style={{ fontSize: 14, fontWeight: 900, color: t.accent }}>{p.amount} tk</div>
               </div>
             </Card>
           ))}
         </div>
+      )}
+    </div>
+  );
+};
+
+// ─── AdminPaymentSettings — manage recipients and payment methods ────────────
+const AdminPaymentSettings = ({ onBack }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(null); // "recipient" | "method" | null
+  const [newLabel, setNewLabel] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const rows = await sb.select("payment_settings", "?order=type,display_order");
+      setItems(rows || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const addItem = async () => {
+    if (!newLabel.trim()) return alert("Pon un nombre");
+    const id = `${showAdd === "recipient" ? "rec" : "met"}-${Date.now().toString(36)}`;
+    const sameType = items.filter(i => i.type === showAdd);
+    const order = sameType.length > 0 ? Math.max(...sameType.map(i => i.display_order || 0)) + 1 : 1;
+    try {
+      await sb.insert("payment_settings", {
+        id, type: showAdd, label: newLabel.trim().toUpperCase(), display_order: order, active: true,
+      });
+      setNewLabel(""); setShowAdd(null);
+      await load();
+    } catch (e) {
+      alert("Error al añadir: " + (e?.message || ""));
+    }
+  };
+
+  const toggleActive = async (item) => {
+    try {
+      await sb.upsert("payment_settings", { ...item, active: !item.active });
+      await load();
+    } catch {}
+  };
+
+  const removeItem = async (item) => {
+    if (!confirm(`¿Eliminar "${item.label}"?\n\nLos pagos pasados que lo usaron seguirán mostrándolo igual.`)) return;
+    try {
+      await sb.remove("payment_settings", "id", item.id);
+      await load();
+    } catch {}
+  };
+
+  const renameItem = async (item) => {
+    const nv = prompt("Nuevo nombre:", item.label);
+    if (!nv || !nv.trim() || nv === item.label) return;
+    try {
+      await sb.upsert("payment_settings", { ...item, label: nv.trim().toUpperCase() });
+      await load();
+    } catch {}
+  };
+
+  const recipients = items.filter(i => i.type === "recipient");
+  const methods = items.filter(i => i.type === "method");
+
+  const renderList = (list, label, type) => (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, marginTop: 6 }}>
+        <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em" }}>{label}</div>
+        <button onClick={() => { setShowAdd(type); setNewLabel(""); }}
+          style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", color: t.accent, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+          + Añadir
+        </button>
+      </div>
+      {showAdd === type && (
+        <Card accent style={{ marginBottom: 10 }}>
+          <Field label="NOMBRE" value={newLabel} onChange={setNewLabel} placeholder={type === "recipient" ? "Ej: TRANSFERENCIA" : "Ej: STRIPE"}/>
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn onClick={addItem} size="sm">Guardar</Btn>
+            <Btn onClick={() => { setShowAdd(null); setNewLabel(""); }} size="sm" variant="ghost">Cancelar</Btn>
+          </div>
+        </Card>
+      )}
+      {list.length === 0 && <Empty icon="check" text="Aún no hay opciones"/>}
+      {list.map(it => (
+        <Card key={it.id} style={{ marginBottom: 6, opacity: it.active ? 1 : 0.5 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: t.text, flex: 1 }}>{it.label}</div>
+            {!it.active && <span style={{ fontSize: 10, color: t.textDim, background: t.bgElevated, padding: "2px 6px", borderRadius: 4 }}>Desactivado</span>}
+            <button onClick={() => toggleActive(it)}
+              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: t.textSub, fontSize: 10, fontWeight: 700, fontFamily: "inherit" }}>
+              {it.active ? "Desactivar" : "Activar"}
+            </button>
+            <button onClick={() => renameItem(it)}
+              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.textSub, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              ✏️
+            </button>
+            <button onClick={() => removeItem(it)}
+              style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon n="trash" s={13}/>
+            </button>
+          </div>
+        </Card>
+      ))}
+    </>
+  );
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>💼 Configuración de pagos</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>Gestiona los destinatarios y formas de pago disponibles al registrar un pago.</div>
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30 }}>Cargando...</div>}
+
+      {!loading && (
+        <>
+          {renderList(recipients, "💼 PAGADO A (DESTINATARIOS)", "recipient")}
+          {renderList(methods, "💳 FORMAS DE PAGO", "method")}
+        </>
       )}
     </div>
   );
@@ -3703,6 +3894,7 @@ const AdminApp = () => {
     if (view === "routinetpls") return "📋 Plantillas de rutinas";
     if (view === "library") return "📚 Biblioteca";
     if (view === "payments") return "💰 Pagos";
+    if (view === "paysettings") return "💼 Configuración de pagos";
     return sel?.name;
   };
 
@@ -3755,7 +3947,8 @@ const AdminApp = () => {
         {view === "payments"  && <AdminPayments onBack={() => setView("list")} db={db} onSelClient={(id) => { setSelId(id); setView("detail"); }}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
-        {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} isSuperAdmin={isSuperAdmin}/>}
+        {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} onPaymentSettings={() => setView("paysettings")} isSuperAdmin={isSuperAdmin}/>}
+        {view === "paysettings" && isSuperAdmin && <AdminPaymentSettings onBack={() => setView("settings")}/>}
         {view === "library"   && <AdminLibrary onBack={() => setView("list")} onRoutineTpls={() => setView("routinetpls")} onExercises={() => setView("exercises")} onBaseDiets={() => setView("basediets")} onFoods={() => setView("foods")}/>}
         {view === "admins"    && isSuperAdmin && <AdminManagement onBack={() => setView("settings")}/>}
         {view === "chat"      && <AdminChat/>}
