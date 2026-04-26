@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.10";
+const APP_VERSION = "5.5.13.3";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -1297,7 +1297,18 @@ const RoutineDayDetail = ({ day, dayIndex, totalDays, onBack }) => (
 // ─── CRoutine — client routine view ──────────────────────────────────────────
 const CRoutine = ({ routine }) => {
   const [selectedDay, setSelectedDay] = useState(null);
-  if (!routine) return <Empty icon="dumbbell" text="Sin rutina asignada aún" />;
+  // Empty state — no routine yet, or routine with no days
+  if (!routine || !routine.days || routine.days.length === 0) {
+    return (
+      <Card style={{ textAlign: "center", padding: "40px 20px" }}>
+        <div style={{ fontSize: 48, marginBottom: 14 }}>💪</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: t.text, marginBottom: 6 }}>Tu rutina está en camino</div>
+        <div style={{ fontSize: 13, color: t.textSub, lineHeight: 1.5 }}>
+          Tu coach está preparando tu rutina personalizada.<br/>Pronto la tendrás disponible aquí.
+        </div>
+      </Card>
+    );
+  }
 
   // Day detail view
   if (selectedDay !== null) {
@@ -1354,6 +1365,9 @@ const SECTION_CONFIG = {
   protein:     { label: "Proteína",      color: "#0D8EAD", bg: "rgba(13,142,173,0.10)", border: "rgba(13,142,173,0.25)", emoji: "🥩" },
   carbs:       { label: "Carbohidratos", color: "#a78bfa", bg: "rgba(167,139,250,0.10)", border: "rgba(167,139,250,0.25)", emoji: "🌾" },
   fats:        { label: "Grasas",        color: "#f0a030", bg: "rgba(240,160,48,0.10)",  border: "rgba(240,160,48,0.25)",  emoji: "🫒" },
+  fat:         { label: "Grasas",        color: "#f0a030", bg: "rgba(240,160,48,0.10)",  border: "rgba(240,160,48,0.25)",  emoji: "🫒" },
+  veggies:     { label: "Verduras",      color: "#5fb98e", bg: "rgba(95,185,142,0.10)",  border: "rgba(95,185,142,0.25)",  emoji: "🥗" },
+  fruits:      { label: "Frutas",        color: "#e58cc4", bg: "rgba(229,140,196,0.10)", border: "rgba(229,140,196,0.25)", emoji: "🍓" },
   extras:      { label: "Adicionales",   color: "#6ee7b7", bg: "rgba(110,231,183,0.10)", border: "rgba(110,231,183,0.25)", emoji: "➕" },
   intraWorkout:{ label: "Intra-Entreno", color: "#38bdf8", bg: "rgba(56,189,248,0.10)",  border: "rgba(56,189,248,0.25)",  emoji: "⚡" },
 };
@@ -1367,7 +1381,7 @@ const MealSection = ({ section }) => {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <span style={{ fontSize: 15 }}>{cfg.emoji}</span>
         <span style={{ fontSize: 11, fontWeight: 800, color: cfg.color, letterSpacing: "0.07em", textTransform: "uppercase" }}>{section.title || cfg.label}</span>
-        {(section.type === "protein" || section.type === "carbs" || section.type === "fats") && (
+        {(section.type === "protein" || section.type === "carbs" || section.type === "fats" || section.type === "veggies" || section.type === "fruits") && section.items.length > 1 && (
           <span style={{ fontSize: 10, color: cfg.color, opacity: 0.6, marginLeft: "auto" }}>Elige 1 opción</span>
         )}
       </div>
@@ -1570,8 +1584,8 @@ const CNotes = ({ client, notes }) => (
 );
 
 // ─── AdminSettings — change password/username ─────────────────────────────────
-const AdminSettings = ({ onBack, onChangelog }) => {
-  const { currentUser, db, setDb, setCurrentUser } = useApp();
+const AdminSettings = ({ onBack, onChangelog, onAdmins, isSuperAdmin }) => {
+  const { currentUser, db, setDb, setCurrentUser, logout } = useApp();
   const [name, setName] = useState(currentUser.name);
   const [email, setEmail] = useState(currentUser.email);
   const [password, setPassword] = useState("");
@@ -1596,9 +1610,12 @@ const AdminSettings = ({ onBack, onChangelog }) => {
       <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
         <Icon n="back" s={16}/> Volver
       </button>
-      <div style={{ fontSize: 20, fontWeight: 900, color: t.text, marginBottom: 20 }}>Mis ajustes</div>
-      <Card>
-        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 16 }}>MI PERFIL</div>
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>⚙️ Ajustes</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>Tu cuenta y configuración del sistema.</div>
+
+      {/* MI CUENTA */}
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>MI CUENTA</div>
+      <Card style={{ marginBottom: 18 }}>
         <Field label="NOMBRE" value={name} onChange={setName}/>
         <Field label="USUARIO (login)" value={email} onChange={setEmail}/>
         <Field label="NUEVA CONTRASEÑA" value={password} onChange={setPassword} type="password" placeholder="Dejar vacío para no cambiar"/>
@@ -1607,17 +1624,47 @@ const AdminSettings = ({ onBack, onChangelog }) => {
           {saved ? <><Icon n="check" s={14}/> Guardado</> : <><Icon n="edit" s={14}/> Guardar cambios</>}
         </Btn>
       </Card>
+
+      {/* ADMINISTRACIÓN */}
+      {isSuperAdmin && (
+        <>
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>ADMINISTRACIÓN</div>
+          <button onClick={onAdmins}
+            style={{ marginBottom: 8, width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+            <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>👥</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar administradores</div>
+              <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Crear y gestionar cuentas de admin</div>
+            </div>
+            <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+          </button>
+        </>
+      )}
+
+      {/* GENERAL */}
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8, marginTop: isSuperAdmin ? 18 : 0 }}>GENERAL</div>
       {onChangelog && (
         <button onClick={onChangelog}
-          style={{ marginTop: 12, width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 14, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+          style={{ marginBottom: 8, width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
           <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📋</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Historial de actualizaciones</div>
-            <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Ver todos los cambios por versión</div>
+            <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Ver todos los cambios por versión</div>
           </div>
           <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
         </button>
       )}
+      <button onClick={logout}
+        style={{ marginBottom: 8, width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <div style={{ width: 40, height: 40, borderRadius: 11, background: t.dangerAlpha, display: "flex", alignItems: "center", justifyContent: "center", color: t.danger }}>
+          <Icon n="logout" s={18}/>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Cerrar sesión</div>
+          <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Salir de la aplicación</div>
+        </div>
+        <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+      </button>
     </div>
   );
 };
@@ -1706,10 +1753,28 @@ const AdminBaseDiets = ({ onBack }) => {
 
 // ─── BaseDietEditor — same editor as AEditDiet but saves to base_diets ───────
 const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, currentUser, onBack }) => {
-  const [meals, setMeals] = useState(initialMeals);
+  // Upgrade existing meals to include veggies + fruits
+  const upgradeMeals = (mls) => {
+    if (!mls || !Array.isArray(mls)) return mls;
+    return mls.map(m => {
+      const types = (m.sections || []).map(s => s.type);
+      const newSections = [...(m.sections || [])];
+      if (!types.includes("veggies")) {
+        newSections.push({ id: "s-v-" + (m.id || Date.now()) + Math.random().toString(36).slice(2, 5), type: "veggies", title: "Verduras", items: [] });
+      }
+      if (!types.includes("fruits")) {
+        newSections.push({ id: "s-r-" + (m.id || Date.now()) + Math.random().toString(36).slice(2, 5), type: "fruits", title: "Frutas", items: [] });
+      }
+      return { ...m, sections: newSections };
+    });
+  };
+  const [meals, setMeals] = useState(upgradeMeals(initialMeals));
   const [openMeal, setOpenMeal] = useState(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Re-upgrade if initialMeals reference changes (useful for async loads)
+  useEffect(() => { setMeals(upgradeMeals(initialMeals)); }, [initialMeals]);
 
   // Defaults helper (reused)
   const mkDefaultMeals = () => {
@@ -1807,8 +1872,10 @@ const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, curr
       id, title: `Comida ${p.length + 1}`, subtitle: "", time: "",
       sections: [
         { id: "s-p-" + id, type: "protein", title: "Proteínas", items: [] },
-        { id: "s-c-" + id, type: "carbs", title: "Hidratos", items: [] },
-        { id: "s-f-" + id, type: "fat", title: "Grasas", items: [] },
+        { id: "s-c-" + id, type: "carbs",   title: "Hidratos",  items: [] },
+        { id: "s-f-" + id, type: "fat",     title: "Grasas",    items: [] },
+        { id: "s-v-" + id, type: "veggies", title: "Verduras",  items: [] },
+        { id: "s-r-" + id, type: "fruits",  title: "Frutas",    items: [] },
       ],
     }]);
     setOpenMeal(id);
@@ -1840,13 +1907,33 @@ const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, curr
       fat:  ((food.fat  * g) / 100).toFixed(1),
     };
     const iid = "i" + Date.now();
-    setMeals(p => p.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros }] }) }));
+    const newItem = { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros };
+
+    setMeals(p => p.map(m => {
+      if (m.id !== mealId) return m;
+      const sections = m.sections || [];
+      // If section exists, just append item
+      if (sections.find(s => s.id === secId)) {
+        return { ...m, sections: sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, newItem] }) };
+      }
+      // Section doesn't exist (placeholder being materialized)
+      // secId format: "s-{type}-{mealId}-placeholder"
+      const match = secId.match(/^s-(\w+)-/);
+      if (match) {
+        const type = match[1];
+        const titleMap = { protein: "Proteínas", carbs: "Hidratos", fat: "Grasas", veggies: "Verduras", fruits: "Frutas" };
+        return { ...m, sections: [...sections, { id: "s-" + type + "-" + mealId, type, title: titleMap[type] || type, items: [newItem] }] };
+      }
+      return m;
+    }));
   };
 
   const secConfig = {
     protein: { label: "🥩 Proteínas", cat: "proteina",     color: "#e05a5a", border: "rgba(224,90,90,0.25)" },
     carbs:   { label: "🍚 Hidratos",  cat: "carbohidrato", color: "#f0a030", border: "rgba(240,160,48,0.25)" },
     fat:     { label: "🥑 Grasas",    cat: "grasa",        color: "#8ac942", border: "rgba(138,201,66,0.25)" },
+    veggies: { label: "🥗 Verduras",  cat: "verdura",      color: "#5fb98e", border: "rgba(95,185,142,0.25)" },
+    fruits:  { label: "🍓 Frutas",    cat: "fruta",        color: "#e58cc4", border: "rgba(229,140,196,0.25)" },
   };
   const letters = ["A","B","C","D","E","F","G","H"];
   const si = { background:t.bg, border:`1px solid ${t.border}`, borderRadius:8, padding:"8px 10px", color:t.text, fontSize:12, fontFamily:"inherit", outline:"none" };
@@ -1903,7 +1990,18 @@ const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, curr
                   </div>
                 </div>
 
-                {(meal.sections || []).map(sec => {
+                {/* Build full sections list — always include all 5 types */}
+                {(() => {
+                  const existing = meal.sections || [];
+                  const allTypes = ["protein", "carbs", "fat", "veggies", "fruits"];
+                  const fullSections = allTypes.map(typ => {
+                    const found = existing.find(s => s.type === typ);
+                    if (found) return found;
+                    // Placeholder section that will be persisted on first save
+                    return { id: `s-${typ}-${meal.id}-placeholder`, type: typ, title: secConfig[typ].label.replace(/^[^\s]+\s/, ""), items: [], _placeholder: true };
+                  });
+                  return fullSections;
+                })().map(sec => {
                   const cfg = secConfig[sec.type] || secConfig.protein;
                   const foodOptions = allFoods.filter(f => f.cat === cfg.cat);
                   return (
@@ -2128,6 +2226,261 @@ const AdminErrors = ({ onBack }) => {
   );
 };
 
+// ─── AdminLibrary — hub for all reusable resources ────────────────────────────
+const AdminLibrary = ({ onBack, onRoutineTpls, onExercises, onBaseDiets, onFoods }) => {
+  const tile = (icon, label, desc, onClick, color = t.accent) => (
+    <button onClick={onClick}
+      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
+      <div style={{ width: 42, height: 42, borderRadius: 11, background: `${color}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>{icon}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{label}</div>
+        <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>{desc}</div>
+      </div>
+      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+    </button>
+  );
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>📚 Biblioteca</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 24 }}>Recursos reutilizables para crear rutinas y dietas.</div>
+
+      {/* Rutinas y ejercicios */}
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>RUTINAS Y EJERCICIOS</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+        {tile("📋", "Plantillas de rutinas", "Rutinas base hombre/mujer y plantillas reutilizables", onRoutineTpls)}
+        {tile("💪", "Ejercicios personalizados", "Tu biblioteca de ejercicios custom", onExercises)}
+      </div>
+
+      {/* Dietas y alimentos */}
+      <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>DIETAS Y ALIMENTOS</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {tile("🍴", "Dietas base", "Plantillas Mujer 1800 / Hombre 3000 kcal", onBaseDiets)}
+        {tile("🍽️", "Alimentos personalizados", "Tu base de datos de alimentos custom", onFoods)}
+      </div>
+
+      <div style={{ marginTop: 24, padding: "12px 14px", background: t.bgElevated, borderRadius: 10, fontSize: 11, color: t.textDim, lineHeight: 1.5 }}>
+        💡 <strong style={{ color: t.textSub }}>Plantillas de dietas</strong> (guardar/cargar) están dentro del editor de dieta de cada cliente.
+      </div>
+    </div>
+  );
+};
+
+// ─── AdminRoutineTemplates — manage routine templates (base + custom) ─────────
+const AdminRoutineTemplates = ({ onBack, db, setDb }) => {
+  const { currentUser } = useApp();
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null); // template row being edited
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newGender, setNewGender] = useState("any");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const rows = await sb.select("routine_templates", "?order=is_base.desc,name");
+      setTemplates(rows || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const createNew = async () => {
+    if (!newName.trim()) return alert("Pon un nombre a la plantilla");
+    try {
+      const id = "rt-" + Date.now() + Math.random().toString(36).slice(2, 6);
+      await sb.insert("routine_templates", {
+        id,
+        name: newName.trim(),
+        is_base: false,
+        gender: newGender,
+        routine_json: { name: newName.trim(), days: [] },
+        created_by: currentUser?.id || null,
+        created_by_name: currentUser?.name || null,
+      });
+      setNewName(""); setNewGender("any"); setShowCreate(false);
+      await load();
+      // Open the editor right away
+      const row = (await sb.select("routine_templates", `?id=eq.${id}`))?.[0];
+      if (row) setEditing(row);
+    } catch (e) {
+      alert("Error al crear: " + (e?.message || "desconocido"));
+    }
+  };
+
+  const deleteTpl = async (tpl) => {
+    if (tpl.is_base) {
+      alert("No se pueden eliminar las rutinas base. Edita su contenido en su lugar.");
+      return;
+    }
+    if (!confirm(`¿Eliminar la plantilla "${tpl.name}"?`)) return;
+    try {
+      await sb.remove("routine_templates", "id", tpl.id);
+      await load();
+    } catch {}
+  };
+
+  const renameTpl = async (tpl) => {
+    const newName = prompt("Nuevo nombre:", tpl.name);
+    if (!newName || !newName.trim() || newName === tpl.name) return;
+    try {
+      await sb.upsert("routine_templates", {
+        id: tpl.id,
+        name: newName.trim(),
+        is_base: tpl.is_base,
+        gender: tpl.gender,
+        routine_json: { ...(tpl.routine_json || {}), name: newName.trim() },
+        created_by: tpl.created_by,
+        created_by_name: tpl.created_by_name,
+        updated_at: new Date().toISOString(),
+      });
+      await load();
+    } catch (e) {
+      alert("Error al renombrar");
+    }
+  };
+
+  // Editor view
+  if (editing) {
+    const fakeClient = { id: "tpl-" + editing.id, gender: editing.gender, name: editing.name };
+    return (
+      <div>
+        <button onClick={() => { setEditing(null); load(); }}
+          style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:14, padding:0 }}>
+          <Icon n="back" s={16}/> Volver a plantillas
+        </button>
+        <div style={{ fontSize: 18, fontWeight: 900, color: t.text, marginBottom: 4 }}>
+          {editing.is_base ? (editing.gender === "female" ? "♀ Rutina base mujer" : "♂ Rutina base hombre") : `📋 ${editing.name}`}
+        </div>
+        <div style={{ fontSize: 12, color: t.textSub, marginBottom: 16 }}>
+          {editing.is_base ? "Plantilla por defecto que se carga al asignar a un cliente nuevo." : "Plantilla personalizada"}
+        </div>
+        <AEditRoutine
+          client={fakeClient}
+          routine={editing.routine_json || { name: editing.name, days: [] }}
+          db={db}
+          setDb={setDb}
+          templateMode={true}
+          templateRow={editing}
+          onTemplateSaved={(rt) => {
+            setEditing(prev => prev ? { ...prev, routine_json: rt } : prev);
+            load();
+          }}
+        />
+      </div>
+    );
+  }
+
+  // List view
+  const baseTpls = templates.filter(t => t.is_base);
+  const customTpls = templates.filter(t => !t.is_base);
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+        <div style={{ fontSize: 20, fontWeight: 900, color: t.text }}>📋 Plantillas de rutinas</div>
+        <button onClick={() => setShowCreate(s => !s)}
+          style={{ background: t.accentAlpha, border:`1.5px solid rgba(30,155,191,0.3)`, borderRadius:10, padding:"7px 14px", cursor:"pointer", color:t.accent, fontSize:12, fontWeight:700, fontFamily:"inherit" }}>
+          {showCreate ? "Cancelar" : "+ Nueva"}
+        </button>
+      </div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>
+        Edita las rutinas base y crea plantillas reutilizables.
+      </div>
+
+      {showCreate && (
+        <Card accent style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: t.accent, fontWeight: 700, marginBottom: 12 }}>NUEVA PLANTILLA</div>
+          <Field label="NOMBRE" value={newName} onChange={setNewName} placeholder="ej: PPL 4 días intermedio"/>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>GÉNERO</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["any","Ambos"],["male","Hombre"],["female","Mujer"]].map(([k,l]) => (
+                <button key={k} onClick={() => setNewGender(k)}
+                  style={{ flex:1, background: newGender === k ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${newGender === k ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 8, padding: "8px", cursor: "pointer", color: newGender === k ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Btn onClick={createNew} size="sm">Crear y editar</Btn>
+        </Card>
+      )}
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30, animation: "pulse 1.5s infinite" }}>Cargando...</div>}
+
+      {!loading && (
+        <>
+          {/* Base routines */}
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8, marginTop: 4 }}>RUTINAS BASE</div>
+          {baseTpls.map(tpl => (
+            <Card key={tpl.id} style={{ marginBottom: 10, borderLeft: `3px solid ${tpl.gender === "female" ? "#e05a8a" : t.accent}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 11, background: tpl.gender === "female" ? "rgba(224,90,138,0.15)" : t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>
+                  {tpl.gender === "female" ? "♀" : "♂"}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{tpl.name}</div>
+                  <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>
+                    {tpl.routine_json?.days?.length || 0} días configurados
+                  </div>
+                </div>
+                <button onClick={() => setEditing(tpl)}
+                  style={{ background: t.accent, color: "white", border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                  Editar
+                </button>
+              </div>
+            </Card>
+          ))}
+
+          {/* Custom templates */}
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8, marginTop: 20 }}>PLANTILLAS PERSONALIZADAS</div>
+          {customTpls.length === 0 && (
+            <Empty icon="dumbbell" text="No hay plantillas personalizadas. Crea una con el botón +"/>
+          )}
+          {customTpls.map(tpl => (
+            <Card key={tpl.id} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 11, background: t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>
+                  {tpl.gender === "female" ? "♀" : tpl.gender === "male" ? "♂" : "💪"}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{tpl.name}</div>
+                  <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>
+                    {tpl.routine_json?.days?.length || 0} días · {tpl.created_by_name || "admin"}
+                  </div>
+                </div>
+                <button onClick={() => renameTpl(tpl)}
+                  style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.textSub, fontSize: 14, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  ✏️
+                </button>
+                <button onClick={() => setEditing(tpl)}
+                  style={{ background: t.accent, color: "white", border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                  Editar
+                </button>
+                <button onClick={() => deleteTpl(tpl)}
+                  style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Icon n="trash" s={13}/>
+                </button>
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+    </div>
+  );
+};
+
 // ─── AdminExercises — manage custom exercises library ────────────────────────
 const AdminExercises = ({ onBack }) => {
   const { currentUser, customExercises, loadCustomExercises } = useApp();
@@ -2335,8 +2688,8 @@ const AdminFoods = ({ onBack }) => {
     } catch {}
   };
 
-  const catColor = cat => cat === "proteina" ? "#e05a5a" : cat === "carbohidrato" ? "#f0a030" : "#8ac942";
-  const catLabel = cat => cat === "proteina" ? "🥩 Proteína" : cat === "carbohidrato" ? "🍚 Hidrato" : "🥑 Grasa";
+  const catColor = cat => cat === "proteina" ? "#e05a5a" : cat === "carbohidrato" ? "#f0a030" : cat === "grasa" ? "#8ac942" : cat === "verdura" ? "#5fb98e" : cat === "fruta" ? "#e58cc4" : "#888";
+  const catLabel = cat => cat === "proteina" ? "🥩 Proteína" : cat === "carbohidrato" ? "🍚 Hidrato" : cat === "grasa" ? "🥑 Grasa" : cat === "verdura" ? "🥗 Verdura" : cat === "fruta" ? "🍓 Fruta" : cat;
 
   const filtered = customFoods.filter(f =>
     !search || f.name.toLowerCase().includes(search.toLowerCase())
@@ -2370,10 +2723,10 @@ const AdminFoods = ({ onBack }) => {
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>CATEGORÍA</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              {[["proteina","🥩 Proteína"],["carbohidrato","🍚 Hidrato"],["grasa","🥑 Grasa"]].map(([val, lbl]) => (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+              {[["proteina","🥩 Proteína"],["carbohidrato","🍚 Hidrato"],["grasa","🥑 Grasa"],["verdura","🥗 Verdura"],["fruta","🍓 Fruta"]].map(([val, lbl]) => (
                 <button key={val} onClick={() => setForm(p => ({ ...p, cat: val }))}
-                  style={{ flex: 1, background: form.cat === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${form.cat === val ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "10px 6px", cursor: "pointer", color: form.cat === val ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                  style={{ background: form.cat === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${form.cat === val ? "rgba(30,155,191,0.3)" : t.border}`, borderRadius: 10, padding: "10px 6px", cursor: "pointer", color: form.cat === val ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
                   {lbl}
                 </button>
               ))}
@@ -2893,6 +3246,8 @@ const AdminApp = () => {
     if (view === "basediets") return "🍴 Dietas base";
     if (view === "errors") return "🐛 Errores";
     if (view === "exercises") return "💪 Ejercicios";
+    if (view === "routinetpls") return "📋 Plantillas de rutinas";
+    if (view === "library") return "📚 Biblioteca";
     return sel?.name;
   };
 
@@ -2941,24 +3296,26 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} isSuperAdmin={isSuperAdmin} onAdmins={()=>setView("admins")} onFoods={()=>setView("foods")} onBaseDiets={()=>setView("basediets")} onErrors={()=>setView("errors")} onExercises={()=>setView("exercises")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} onLibrary={()=>setView("library")} onErrors={()=>setView("errors")}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
-        {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")}/>}
-        {view === "admins"    && isSuperAdmin && <AdminManagement onBack={() => setView("list")}/>}
+        {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} isSuperAdmin={isSuperAdmin}/>}
+        {view === "library"   && <AdminLibrary onBack={() => setView("list")} onRoutineTpls={() => setView("routinetpls")} onExercises={() => setView("exercises")} onBaseDiets={() => setView("basediets")} onFoods={() => setView("foods")}/>}
+        {view === "admins"    && isSuperAdmin && <AdminManagement onBack={() => setView("settings")}/>}
         {view === "chat"      && <AdminChat/>}
         {view === "changelog" && <AdminChangelog onBack={() => setView("settings")}/>}
         {view === "notifications" && <AdminNotifications onBack={() => setView("list")} onSel={(clientId) => { setSelId(clientId); setView("detail"); }} onGoToErrors={() => setView("errors")}/>}
-        {view === "foods"     && <AdminFoods onBack={() => setView("list")}/>}
-        {view === "basediets" && <AdminBaseDiets onBack={() => setView("list")}/>}
+        {view === "foods"     && <AdminFoods onBack={() => setView("library")}/>}
+        {view === "basediets" && <AdminBaseDiets onBack={() => setView("library")}/>}
         {view === "errors"    && <AdminErrors onBack={() => setView("list")}/>}
-        {view === "exercises" && <AdminExercises onBack={() => setView("list")}/>}
+        {view === "exercises" && <AdminExercises onBack={() => setView("library")}/>}
+        {view === "routinetpls" && <AdminRoutineTemplates onBack={() => setView("library")} db={db} setDb={setDb}/>}
       </div>
     </div>
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmins, onFoods, onBaseDiets, onErrors, onExercises }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors }) => {
   const { currentUser } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
@@ -3056,71 +3413,31 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, isSuperAdmin, onAdmi
       ))}
     </div>
 
-    {/* Superadmin: manage admins button */}
-    {isSuperAdmin && (
-      <button onClick={onAdmins}
-        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
-        <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>👥</div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar administradores</div>
-          <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Crear y gestionar cuentas de admin</div>
-        </div>
-        <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+    {/* Two main entry buttons: Library + Errors */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      <button onClick={onLibrary}
+        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", fontFamily: "inherit" }}>
+        <div style={{ fontSize: 24 }}>📚</div>
+        <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Biblioteca</div>
+        <div style={{ fontSize: 10, color: t.textSub, textAlign: "center", lineHeight: 1.3 }}>Rutinas · Ejercicios<br/>Dietas · Alimentos</div>
       </button>
-    )}
 
-    {/* Manage foods button — all admins */}
-    <button onClick={onFoods}
-      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
-      <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🍽️</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar alimentos</div>
-        <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Añadir alimentos personalizados a la base de datos</div>
-      </div>
-      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
-    </button>
-
-    {/* Manage base diets button — all admins */}
-    <button onClick={onBaseDiets}
-      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
-      <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🍴</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Editar dietas base</div>
-        <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Personalizar las plantillas Mujer 1800 y Hombre 3000</div>
-      </div>
-      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
-    </button>
-
-    {/* Exercises button — all admins */}
-    <button onClick={onExercises}
-      style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
-      <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>💪</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Gestionar ejercicios</div>
-        <div style={{ fontSize: 12, color: t.textSub, marginTop: 2 }}>Añadir ejercicios personalizados a la biblioteca</div>
-      </div>
-      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
-    </button>
-
-    {/* Errors button — all admins */}
-    <button onClick={onErrors}
-      style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left", width: "100%" }}>
-      <div style={{ width: 40, height: 40, borderRadius: 11, background: errorCount > 0 ? "rgba(224,90,90,0.15)" : t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, position: "relative" }}>
-        🐛
-        {errorCount > 0 && (
-          <div style={{ position: "absolute", top: -4, right: -4, background: t.danger, color: "white", borderRadius: 10, minWidth: 18, height: 18, fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
-            {errorCount > 99 ? "99+" : errorCount}
-          </div>
-        )}
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Errores de la app</div>
-        <div style={{ fontSize: 12, color: errorCount > 0 ? t.danger : t.textSub, marginTop: 2 }}>
-          {errorCount > 0 ? `${errorCount} error${errorCount !== 1 ? "es" : ""} sin resolver` : "Sin errores pendientes"}
+      <button onClick={onErrors}
+        style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 12, padding: "14px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", fontFamily: "inherit", position: "relative" }}>
+        <div style={{ fontSize: 24, position: "relative" }}>
+          🐛
+          {errorCount > 0 && (
+            <div style={{ position: "absolute", top: -6, right: -10, background: t.danger, color: "white", borderRadius: 10, minWidth: 18, height: 18, fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
+              {errorCount > 99 ? "99+" : errorCount}
+            </div>
+          )}
         </div>
-      </div>
-      <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
-    </button>
+        <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Errores</div>
+        <div style={{ fontSize: 10, color: errorCount > 0 ? t.danger : t.textSub, textAlign: "center", lineHeight: 1.3 }}>
+          {errorCount > 0 ? `${errorCount} sin resolver` : "Todo en orden"}
+        </div>
+      </button>
+    </div>
 
     {/* List */}
     {filtered.length === 0 && <Empty icon="users" text={filter==="done" ? "Ningún cliente ha hecho check-in esta semana" : filter==="pending" ? "Todos los clientes han hecho check-in 🎉" : "Sin clientes"}/>}
@@ -3694,14 +4011,38 @@ ${rawText.slice(0, 6000)}`
 };
 
 // ─── AEditRoutine ─────────────────────────────────────────────────────────────
-const AEditRoutine = ({ client, routine: init, db, setDb }) => {
-  const { customExercises } = useApp();
+// Reused for both client routines AND template editing (when templateMode is true)
+const AEditRoutine = ({ client, routine: init, db, setDb, templateMode = false, templateRow = null, onTemplateSaved = null }) => {
+  const { customExercises, currentUser } = useApp();
   const [r, setR] = useState(init||{name:"",days:[]});
   const [saved, setSaved] = useState(false);
   const [showPickerFor, setShowPickerFor] = useState(null); // day index or null
-  useEffect(() => { setR(init||{name:"",days:[]}); setSaved(false); }, [client.id]);
+  const [showTplList, setShowTplList] = useState(false);
+  const [myTemplates, setMyTemplates] = useState([]);
+  const [loadingBase, setLoadingBase] = useState(false);
+  useEffect(() => { setR(init||{name:"",days:[]}); setSaved(false); }, [client?.id, templateRow?.id]);
 
   const save = async () => {
+    if (templateMode && templateRow) {
+      // Save back to routine_templates
+      try {
+        await sb.upsert("routine_templates", {
+          id: templateRow.id,
+          name: r.name || templateRow.name,
+          is_base: templateRow.is_base || false,
+          gender: templateRow.gender || "any",
+          routine_json: r,
+          created_by: templateRow.created_by || currentUser?.id || null,
+          created_by_name: templateRow.created_by_name || currentUser?.name || null,
+          updated_at: new Date().toISOString(),
+        });
+        setSaved(true); setTimeout(()=>setSaved(false),2000);
+        if (onTemplateSaved) onTemplateSaved(r);
+      } catch (e) {
+        alert("Error al guardar la plantilla: " + (e?.message || "desconocido"));
+      }
+      return;
+    }
     setDb(p=>({...p,routines:{...p.routines,[client.id]:r}}));
     setSaved(true); setTimeout(()=>setSaved(false),2000);
     await sb.upsert("client_data", { client_id: client.id, routine_json: r, updated_at: new Date().toISOString() });
@@ -3765,6 +4106,112 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
   const si = { background: t.bg, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px 10px", color: t.text, fontSize: 12, fontFamily: "inherit", outline: "none" };
 
   // All exercises = built-in + custom
+  // ─── Routine templates ─────────────────────────────────────────────────
+  // Helper: regenerate IDs to avoid clashes when applying a template
+  const cloneWithNewIds = (rt) => {
+    if (!rt || !rt.days) return rt;
+    return {
+      ...rt,
+      days: rt.days.map(d => {
+        const newDayId = "d" + Date.now() + Math.random().toString(36).slice(2, 5);
+        return {
+          ...d,
+          id: newDayId,
+          exercises: (d.exercises || []).map(ex => ({
+            ...ex,
+            setsList: ex.setsList ? ex.setsList.map(s => ({
+              ...s,
+              id: "s" + Date.now() + Math.random().toString(36).slice(2, 5),
+            })) : null,
+          })),
+        };
+      }),
+    };
+  };
+
+  const loadBaseRoutine = async (gender) => {
+    setLoadingBase(true);
+    try {
+      const id = gender === "female" ? "base-female" : "base-male";
+      const rows = await sb.select("routine_templates", `?id=eq.${id}`);
+      if (!rows || rows.length === 0) {
+        alert("No se encontró la rutina base. Edítala primero desde 'Plantillas de rutinas' en el menú admin.");
+        setLoadingBase(false);
+        return;
+      }
+      const baseRt = rows[0].routine_json || { name: rows[0].name, days: [] };
+      if (!baseRt.days || baseRt.days.length === 0) {
+        alert("La rutina base " + (gender === "female" ? "mujer" : "hombre") + " todavía está vacía. Edítala primero desde 'Plantillas de rutinas' en el menú admin.");
+        setLoadingBase(false);
+        return;
+      }
+      const cloned = cloneWithNewIds({ ...baseRt, name: baseRt.name || rows[0].name });
+      setR(cloned);
+    } catch (e) {
+      alert("Error al cargar la rutina base: " + (e?.message || "desconocido"));
+      logError("routine.load_base", e?.message || String(e), `gender=${gender}`, e?.stack || "");
+    }
+    setLoadingBase(false);
+  };
+
+  const loadTemplates = async () => {
+    try {
+      let filter = "?is_base=eq.false&order=created_at.desc";
+      const rows = await sb.select("routine_templates", filter);
+      // Filter by client gender
+      const filtered = (rows || []).filter(t => !t.gender || t.gender === "any" || t.gender === client.gender);
+      setMyTemplates(filtered);
+      setShowTplList(true);
+    } catch (e) {
+      alert("Error al cargar plantillas");
+    }
+  };
+
+  const applyTemplate = (tpl) => {
+    if (r.days && r.days.length > 0) {
+      if (!confirm(`Esto sustituirá la rutina actual con la plantilla "${tpl.name}". ¿Continuar?`)) return;
+    }
+    const cloned = cloneWithNewIds(tpl.routine_json || { name: tpl.name, days: [] });
+    setR({ ...cloned, name: cloned.name || tpl.name });
+    setShowTplList(false);
+  };
+
+  const deleteTemplate = async (tplId, tplName) => {
+    if (!confirm(`¿Eliminar la plantilla "${tplName}"? Esta acción no se puede deshacer.`)) return;
+    try {
+      await sb.remove("routine_templates", "id", tplId);
+      setMyTemplates(p => p.filter(t => t.id !== tplId));
+    } catch {
+      alert("Error al eliminar");
+    }
+  };
+
+  const saveAsTemplate = async () => {
+    if (!r.days || r.days.length === 0) {
+      alert("La rutina está vacía, no hay nada que guardar.");
+      return;
+    }
+    const name = prompt("Nombre de la plantilla:", r.name || "");
+    if (!name || !name.trim()) return;
+    const genderOpt = prompt("¿Para qué género? Escribe: hombre / mujer / ambos", "ambos");
+    const gender = genderOpt === "hombre" ? "male" : genderOpt === "mujer" ? "female" : "any";
+    try {
+      await sb.insert("routine_templates", {
+        id: "rt-" + Date.now() + Math.random().toString(36).slice(2, 6),
+        name: name.trim(),
+        is_base: false,
+        gender,
+        routine_json: r,
+        created_by: currentUser?.id || null,
+        created_by_name: currentUser?.name || null,
+      });
+      alert(`✓ Plantilla "${name}" guardada.`);
+    } catch (e) {
+      alert("Error al guardar la plantilla: " + (e?.message || "desconocido"));
+      logError("routine_template.save", e?.message || String(e), "Save routine template", e?.stack || "");
+    }
+  };
+
   const ALL_EXERCISES = [
     ...EXERCISE_DB.map(e => ({ ...e, muscle_group: e.muscle, default_sets: e.sets, default_reps: e.reps, default_rest: e.rest })),
     ...(customExercises || []),
@@ -3782,8 +4229,95 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
         />
       )}
 
+      {/* Template selector overlay */}
+      {showTplList && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(7,9,15,0.92)", zIndex: 1000, display: "flex", flexDirection: "column", padding: "40px 20px 20px", overflow: "auto" }}>
+          <div style={{ maxWidth: 430, width: "100%", margin: "0 auto" }}>
+            <button onClick={() => setShowTplList(false)}
+              style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+              <Icon n="back" s={16}/> Cerrar
+            </button>
+            <div style={{ fontSize: 20, fontWeight: 900, color: t.text, marginBottom: 4 }}>📂 Plantillas de rutina</div>
+            <div style={{ fontSize: 13, color: t.textSub, marginBottom: 20 }}>
+              {client.gender ? `Filtradas para ${client.gender === "male" ? "hombre" : "mujer"}` : "Sin filtro de género"}
+            </div>
+            {myTemplates.length === 0 && (
+              <Empty icon="dumbbell" text="No hay plantillas guardadas. Crea una desde el botón 💾 después de configurar una rutina."/>
+            )}
+            {myTemplates.map(tpl => (
+              <Card key={tpl.id} style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 10, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
+                    {tpl.gender === "female" ? "♀" : tpl.gender === "male" ? "♂" : "💪"}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>{tpl.name}</div>
+                    <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>
+                      {tpl.routine_json?.days?.length || 0} días · por {tpl.created_by_name || "admin"}
+                    </div>
+                  </div>
+                  <button onClick={() => applyTemplate(tpl)}
+                    style={{ background: t.accent, color: "white", border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                    Usar
+                  </button>
+                  <button onClick={() => deleteTemplate(tpl.id, tpl.name)}
+                    style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Icon n="trash" s={13}/>
+                  </button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty state — show action buttons when routine has no days (NOT in template mode) */}
+      {!templateMode && (!r.days || r.days.length === 0) && (
+        <Card accent style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: t.text, marginBottom: 4 }}>📋 Empezar una rutina</div>
+          <div style={{ fontSize: 12, color: t.textSub, marginBottom: 14 }}>Elige por dónde empezar. Hasta que guardes, el cliente no verá nada.</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {client.gender && (
+              <button onClick={() => loadBaseRoutine(client.gender)} disabled={loadingBase}
+                style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 20 }}>{client.gender === "female" ? "♀" : "♂"}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: t.accent }}>
+                    Cargar rutina base {client.gender === "female" ? "mujer" : "hombre"}
+                  </div>
+                  <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>
+                    {loadingBase ? "Cargando..." : "Plantilla por defecto del coach para este género"}
+                  </div>
+                </div>
+              </button>
+            )}
+            <button onClick={loadTemplates}
+              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 20 }}>📂</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>Cargar de plantillas</div>
+                <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Elegir una plantilla guardada anteriormente</div>
+              </div>
+            </button>
+            <button onClick={addDay}
+              style={{ background: t.bgElevated, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 20 }}>✏️</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>Crear desde cero</div>
+                <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Empezar con un día vacío y construir manualmente</div>
+              </div>
+            </button>
+          </div>
+          {!client.gender && (
+            <div style={{ marginTop: 12, fontSize: 11, color: t.textDim, fontStyle: "italic" }}>
+              💡 Define el género del cliente en su perfil para poder cargar la rutina base.
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* Word importer */}
-      <WordImporter onImport={imported => setR(imported)}/>
+      {!templateMode && <WordImporter onImport={imported => setR(imported)}/>}
 
       <Field label="NOMBRE DE LA RUTINA" value={r.name} onChange={v=>setR(r=>({...r,name:v}))}/>
       {r.days.map((day,di)=>(
@@ -3873,6 +4407,18 @@ const AEditRoutine = ({ client, routine: init, db, setDb }) => {
           </div>
         </Card>
       ))}
+      {!templateMode && r.days && r.days.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4, marginBottom: 8 }}>
+          <button onClick={loadTemplates}
+            style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: t.text, fontSize: 12, fontWeight: 700, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            📂 Plantillas
+          </button>
+          <button onClick={saveAsTemplate}
+            style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: t.text, fontSize: 12, fontWeight: 700, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            💾 Guardar plantilla
+          </button>
+        </div>
+      )}
       <div style={{display:"flex",gap:10,marginTop:4}}>
         <Btn onClick={addDay} variant="ghost" size="sm"><Icon n="plus" s={14}/> Día</Btn>
         <SaveBtn onSave={save} saved={saved}/>
@@ -4186,10 +4732,28 @@ const MacroCalculator = ({ onAdd }) => {
 const AEditDiet = ({ client, diet: init, db, setDb }) => {
   const { customFoods } = useApp();
   const emptyDiet = { name:"", meals:[] };
-  const [d, setD] = useState(init || emptyDiet);
+  // Upgrade old diets to include veggies + fruits sections
+  const upgradeDiet = (diet) => {
+    if (!diet || !diet.meals) return diet;
+    return {
+      ...diet,
+      meals: diet.meals.map(m => {
+        const types = (m.sections || []).map(s => s.type);
+        const newSections = [...(m.sections || [])];
+        if (!types.includes("veggies")) {
+          newSections.push({ id: "s-v-" + m.id + Math.random().toString(36).slice(2, 5), type: "veggies", title: "Verduras", items: [] });
+        }
+        if (!types.includes("fruits")) {
+          newSections.push({ id: "s-r-" + m.id + Math.random().toString(36).slice(2, 5), type: "fruits", title: "Frutas", items: [] });
+        }
+        return { ...m, sections: newSections };
+      }),
+    };
+  };
+  const [d, setD] = useState(upgradeDiet(init) || emptyDiet);
   const [saved, setSaved] = useState(false);
   const [openMeal, setOpenMeal] = useState(null);
-  useEffect(() => { setD(init||emptyDiet); setSaved(false); setOpenMeal(null); }, [client.id]);
+  useEffect(() => { setD(upgradeDiet(init)||emptyDiet); setSaved(false); setOpenMeal(null); }, [client.id]);
 
   // Combined food DB: built-in + custom
   const ALL_FOODS = [...FOOD_DB, ...(customFoods || []).map(f => ({
@@ -4231,6 +4795,8 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
         { id: "s" + (Date.now() + 1), type: "protein", title: "Proteínas", items: [] },
         { id: "s" + (Date.now() + 2), type: "carbs",   title: "Hidratos",  items: [] },
         { id: "s" + (Date.now() + 3), type: "fat",     title: "Grasas",    items: [] },
+        { id: "s" + (Date.now() + 4), type: "veggies", title: "Verduras",  items: [] },
+        { id: "s" + (Date.now() + 5), type: "fruits",  title: "Frutas",    items: [] },
       ],
     };
     setD(p => ({ ...p, meals: [...(p.meals || []), newMeal] }));
@@ -4249,7 +4815,24 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
       fat:  ((food.fat  * g) / 100).toFixed(1),
     };
     const iid = "i" + Date.now();
-    setD(p => ({ ...p, meals: p.meals.map(m => m.id !== mealId ? m : { ...m, sections: m.sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros }] }) } ) }));
+    const newItem = { id: iid, name: food.name, emoji: food.emoji, amount: `${g}g`, grams: g, foodName: food.name, macros };
+
+    setD(p => ({ ...p, meals: (p.meals || []).map(m => {
+      if (m.id !== mealId) return m;
+      const sections = m.sections || [];
+      // Section already exists
+      if (sections.find(s => s.id === secId)) {
+        return { ...m, sections: sections.map(s => s.id !== secId ? s : { ...s, items: [...s.items, newItem] }) };
+      }
+      // Section is a placeholder — materialize it
+      const match = secId.match(/^s-(\w+)-/);
+      if (match) {
+        const type = match[1];
+        const titleMap = { protein: "Proteínas", carbs: "Hidratos", fat: "Grasas", veggies: "Verduras", fruits: "Frutas" };
+        return { ...m, sections: [...sections, { id: "s-" + type + "-" + mealId, type, title: titleMap[type] || type, items: [newItem] }] };
+      }
+      return m;
+    }) }));
   };
 
   // Add a second+ component to an existing option (makes it a combination)
@@ -4368,6 +4951,8 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
     protein: { label: "🥩 Proteínas", cat: "proteina",     color: "#e05a5a", border: "rgba(224,90,90,0.25)" },
     carbs:   { label: "🍚 Hidratos",  cat: "carbohidrato", color: "#f0a030", border: "rgba(240,160,48,0.25)" },
     fat:     { label: "🥑 Grasas",    cat: "grasa",        color: "#8ac942", border: "rgba(138,201,66,0.25)" },
+    veggies: { label: "🥗 Verduras",  cat: "verdura",      color: "#5fb98e", border: "rgba(95,185,142,0.25)" },
+    fruits:  { label: "🍓 Frutas",    cat: "fruta",        color: "#e58cc4", border: "rgba(229,140,196,0.25)" },
   };
 
   // Helper: calculate macros for a food + grams
@@ -4714,8 +5299,16 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
                   </div>
                 </div>
 
-                {/* Sections: Protein / Carbs / Fat */}
-                {(meal.sections || []).map(sec => {
+                {/* Sections: Protein / Carbs / Fat / Veggies / Fruits — always show all 5 */}
+                {(() => {
+                  const existing = meal.sections || [];
+                  const allTypes = ["protein", "carbs", "fat", "veggies", "fruits"];
+                  return allTypes.map(typ => {
+                    const found = existing.find(s => s.type === typ);
+                    if (found) return found;
+                    return { id: `s-${typ}-${meal.id}-placeholder`, type: typ, title: secConfig[typ].label.replace(/^[^\s]+\s/, ""), items: [], _placeholder: true };
+                  });
+                })().map(sec => {
                   const cfg = secConfig[sec.type] || secConfig.protein;
                   const foodOptions = ALL_FOODS.filter(f => f.cat === cfg.cat);
                   const letters = ["A","B","C","D","E","F","G","H"];
