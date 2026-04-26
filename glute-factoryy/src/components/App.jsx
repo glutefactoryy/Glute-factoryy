@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.13.3";
+const APP_VERSION = "5.5.14";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -220,6 +220,60 @@ const validateAll = (checks) => {
   return null;
 };
 
+// ─── PAYMENT HELPERS ──────────────────────────────────────────────────────────
+// Default prices per plan (in tokens)
+const PLAN_PRICES = { mensual: 50, trimestral: 135, semestral: 250, anual: 480 };
+const PLAN_LABELS = { mensual: "Mensual", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual" };
+const PLAN_MONTHS = { mensual: 1, trimestral: 3, semestral: 6, anual: 12 };
+
+// Calculate next renewal date given a start date and plan
+const calcNextRenewal = (startDateStr, planType) => {
+  const months = PLAN_MONTHS[planType] || 1;
+  const d = new Date(startDateStr + "T00:00:00");
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+};
+
+// Status of a subscription based on today's date
+const getSubStatus = (sub, today = new Date()) => {
+  if (!sub || !sub.next_renewal_date) return { status: "none", label: "Sin plan", color: "#888" };
+  const renewal = new Date(sub.next_renewal_date + "T23:59:59");
+  const todayDate = new Date(today.toISOString().slice(0, 10) + "T00:00:00");
+  const diffDays = Math.floor((renewal - todayDate) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0) return { status: "overdue", label: `Vencido hace ${Math.abs(diffDays)}d`, color: "#e05a5a", days: diffDays };
+  if (diffDays <= 3) return { status: "warning", label: `Vence en ${diffDays}d`, color: "#f0a030", days: diffDays };
+  return { status: "active", label: `Vence en ${diffDays}d`, color: "#8ac942", days: diffDays };
+};
+
+// Compute the breakdown of a payment into shares
+const computePaymentSplit = (amount, isFirstPayment, captadorId, entrenadorId) => {
+  amount = parseFloat(amount) || 0;
+  const app = +(amount * 0.05).toFixed(2);
+  const afterApp = amount - app;
+  const company = +(afterApp * 0.5).toFixed(2);
+  const adminPool = +(afterApp - company).toFixed(2);
+  let captador = 0, entrenador = 0;
+  if (isFirstPayment) {
+    // First payment: 50/50
+    captador = +(adminPool * 0.5).toFixed(2);
+    entrenador = +(adminPool - captador).toFixed(2);
+  } else {
+    // Renewal: entrenador 75%, captador 25%
+    entrenador = +(adminPool * 0.75).toFixed(2);
+    captador = +(adminPool - entrenador).toFixed(2);
+  }
+  // If no captador → goes to "pending"
+  // If no entrenador → goes to "pending"
+  // If captador === entrenador → they get both shares combined
+  const sharesByAdmin = {};
+  const pending = { captador: 0, entrenador: 0 };
+  if (captadorId) sharesByAdmin[captadorId] = (sharesByAdmin[captadorId] || 0) + captador;
+  else pending.captador = captador;
+  if (entrenadorId) sharesByAdmin[entrenadorId] = (sharesByAdmin[entrenadorId] || 0) + entrenador;
+  else pending.entrenador = entrenador;
+  return { app, company, adminPool, captador, entrenador, sharesByAdmin, pending };
+};
+
 const mapCheckinRow = r => {
   // Parse external factors from comment if stored there
   let comment = r.comment || "";
@@ -266,6 +320,8 @@ const mergeSupabaseIntoDb = (prev, { clients, weights, notes, clientData, checki
       avatar: c.avatar || (c.name || "??").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
       password: c.password || "",
       passwordChanged: c.password_changed || false,
+      captador_id: c.captador_id || "",
+      entrenador_id: c.entrenador_id || "",
     }));
     const ids = new Set(sbClients.map(c => c.id));
     next.clients = [...prev.clients.filter(c => !ids.has(c.id)), ...sbClients];
@@ -2226,6 +2282,404 @@ const AdminErrors = ({ onBack }) => {
   );
 };
 
+// ─── AdminPayments — list of clients and their subscription status ───────────
+const AdminPayments = ({ onBack, db, onSelClient }) => {
+  const { currentUser } = useApp();
+  const [subs, setSubs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("all");
+  const [editing, setEditing] = useState(null); // { client, sub }
+  const [showSummary, setShowSummary] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const rows = await sb.select("client_subscriptions", "?order=next_renewal_date");
+      setSubs(rows || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  // Build a list combining clients + their subscription
+  const items = (db.clients || []).map(c => {
+    const sub = subs.find(s => s.client_id === c.id);
+    const status = getSubStatus(sub);
+    return { client: c, sub, status };
+  });
+
+  const filtered = items.filter(it => {
+    if (filter === "all") return true;
+    if (filter === "overdue") return it.status.status === "overdue";
+    if (filter === "warning") return it.status.status === "warning";
+    if (filter === "active")  return it.status.status === "active";
+    if (filter === "none")    return it.status.status === "none";
+    return true;
+  });
+
+  const counts = {
+    overdue: items.filter(it => it.status.status === "overdue").length,
+    warning: items.filter(it => it.status.status === "warning").length,
+    active:  items.filter(it => it.status.status === "active").length,
+    none:    items.filter(it => it.status.status === "none").length,
+  };
+
+  const fmtDate = ds => {
+    if (!ds) return "—";
+    const d = new Date(ds + "T00:00:00");
+    return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
+  };
+
+  if (editing) {
+    return (
+      <PaymentEditor
+        client={editing.client}
+        existingSub={editing.sub}
+        onClose={() => { setEditing(null); load(); }}
+        currentUser={currentUser}
+        admins={(db.users || []).filter(u => u.role === "admin" || u.role === "superadmin")}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        <div style={{ fontSize: 22, fontWeight: 900, color: t.text }}>💰 Pagos</div>
+      </div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>Gestión de suscripciones y renovaciones.</div>
+
+      {/* Summary stats — quick view */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 16 }}>
+        <button onClick={() => setFilter("overdue")}
+          style={{ background: filter === "overdue" ? "rgba(224,90,90,0.15)" : t.bgCard, border: `1.5px solid ${filter === "overdue" ? "rgba(224,90,90,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#e05a5a" }}>{counts.overdue}</div>
+          <div style={{ fontSize: 10, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Vencidos</div>
+        </button>
+        <button onClick={() => setFilter("warning")}
+          style={{ background: filter === "warning" ? "rgba(240,160,48,0.15)" : t.bgCard, border: `1.5px solid ${filter === "warning" ? "rgba(240,160,48,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#f0a030" }}>{counts.warning}</div>
+          <div style={{ fontSize: 10, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Por vencer</div>
+        </button>
+        <button onClick={() => setFilter("active")}
+          style={{ background: filter === "active" ? "rgba(138,201,66,0.15)" : t.bgCard, border: `1.5px solid ${filter === "active" ? "rgba(138,201,66,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#8ac942" }}>{counts.active}</div>
+          <div style={{ fontSize: 10, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Al día</div>
+        </button>
+        <button onClick={() => setFilter("none")}
+          style={{ background: filter === "none" ? t.accentAlpha : t.bgCard, border: `1.5px solid ${filter === "none" ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: t.textSub }}>{counts.none}</div>
+          <div style={{ fontSize: 10, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Sin plan</div>
+        </button>
+      </div>
+
+      {/* Show all button when filtered */}
+      {filter !== "all" && (
+        <button onClick={() => setFilter("all")}
+          style={{ width: "100%", background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px", cursor: "pointer", color: t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit", marginBottom: 12 }}>
+          Ver todos ({items.length})
+        </button>
+      )}
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30 }}>Cargando...</div>}
+
+      {/* List */}
+      {!loading && filtered.map(({ client, sub, status }) => (
+        <Card key={client.id} style={{ marginBottom: 10, borderLeft: status.status === "none" ? `1px solid ${t.border}` : `3px solid ${status.color}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: t.bgElevated, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: t.text, flexShrink: 0 }}>
+              {client.avatar || (client.name || "??").slice(0, 2).toUpperCase()}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: t.text, marginBottom: 2 }}>{client.name}</div>
+              {sub ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: t.accent, background: t.accentAlpha, padding: "2px 7px", borderRadius: 5 }}>
+                    {PLAN_LABELS[sub.plan_type]}
+                  </span>
+                  {sub.price && <span style={{ fontSize: 11, color: t.textSub }}>{sub.price} tokens</span>}
+                  <span style={{ fontSize: 11, fontWeight: 700, color: status.color }}>{status.label}</span>
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: t.textSub, fontStyle: "italic" }}>Sin plan asignado</div>
+              )}
+              {sub && (
+                <div style={{ fontSize: 10, color: t.textDim, marginTop: 3 }}>
+                  Próxima renovación: {fmtDate(sub.next_renewal_date)}
+                </div>
+              )}
+            </div>
+            <button onClick={() => setEditing({ client, sub })}
+              style={{ background: t.accent, color: "white", border: "none", borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+              {sub ? "Gestionar" : "Asignar"}
+            </button>
+          </div>
+        </Card>
+      ))}
+
+      {!loading && filtered.length === 0 && (
+        <Empty icon="check" text={filter === "all" ? "No hay clientes" : "Ningún cliente en este filtro"}/>
+      )}
+    </div>
+  );
+};
+
+// ─── PaymentEditor — assign / manage a client subscription ───────────────────
+const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState(existingSub ? {
+    plan_type: existingSub.plan_type || "mensual",
+    price: existingSub.price || PLAN_PRICES[existingSub.plan_type] || 50,
+    start_date: existingSub.start_date || today,
+    last_payment_date: existingSub.last_payment_date || today,
+  } : {
+    plan_type: "mensual",
+    price: PLAN_PRICES.mensual,
+    start_date: today,
+    last_payment_date: today,
+  });
+  const [history, setHistory] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [showRegisterPayment, setShowRegisterPayment] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sb.select("payment_history", `?client_id=eq.${client.id}&order=payment_date.desc`);
+        setHistory(rows || []);
+      } catch {}
+    })();
+  }, [client.id]);
+
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const onPlanChange = pt => setForm(p => ({ ...p, plan_type: pt, price: PLAN_PRICES[pt] || p.price }));
+
+  const next_renewal = calcNextRenewal(form.start_date, form.plan_type);
+
+  const adminName = id => (admins.find(a => a.id === id)?.name) || "—";
+
+  // Save / update subscription (no payment register)
+  const saveSubscription = async () => {
+    setSaving(true);
+    try {
+      await sb.upsert("client_subscriptions", {
+        client_id: client.id,
+        plan_type: form.plan_type,
+        price: parseFloat(form.price) || 0,
+        start_date: form.start_date,
+        next_renewal_date: next_renewal,
+        last_payment_date: form.last_payment_date || null,
+        active: true,
+        updated_at: new Date().toISOString(),
+      });
+      onClose();
+    } catch (e) {
+      alert("Error al guardar: " + (e?.message || ""));
+    }
+    setSaving(false);
+  };
+
+  // Register a new payment (creates payment_history + advances next_renewal)
+  const registerPayment = async () => {
+    setSaving(true);
+    try {
+      const isFirst = history.length === 0;
+      // Calculate next renewal: if there's an existing sub, advance from current renewal date; otherwise from start
+      const baseDate = existingSub?.next_renewal_date || form.start_date;
+      const periodStart = isFirst ? form.start_date : (existingSub?.next_renewal_date || form.start_date);
+      const periodEnd = calcNextRenewal(periodStart, form.plan_type);
+
+      // Insert payment history
+      await sb.insert("payment_history", {
+        client_id: client.id,
+        plan_type: form.plan_type,
+        amount: parseFloat(form.price) || 0,
+        payment_date: form.last_payment_date,
+        period_start: periodStart,
+        period_end: periodEnd,
+        is_first_payment: isFirst,
+        captador_id: client.captador_id || null,
+        entrenador_id: client.entrenador_id || null,
+        created_by: currentUser?.id || null,
+      });
+
+      // Update subscription with new renewal
+      await sb.upsert("client_subscriptions", {
+        client_id: client.id,
+        plan_type: form.plan_type,
+        price: parseFloat(form.price) || 0,
+        start_date: existingSub?.start_date || form.start_date,
+        next_renewal_date: periodEnd,
+        last_payment_date: form.last_payment_date,
+        active: true,
+        updated_at: new Date().toISOString(),
+      });
+
+      onClose();
+    } catch (e) {
+      alert("Error al registrar el pago: " + (e?.message || ""));
+    }
+    setSaving(false);
+  };
+
+  const cancelSub = async () => {
+    if (!confirm(`¿Cancelar la suscripción de ${client.name}? El historial de pagos se conservará.`)) return;
+    try {
+      await sb.remove("client_subscriptions", "client_id", client.id);
+      onClose();
+    } catch (e) {
+      alert("Error al cancelar");
+    }
+  };
+
+  const fmtDate = ds => {
+    if (!ds) return "—";
+    const d = new Date(ds + "T00:00:00");
+    return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
+  };
+
+  const isFirstPayment = history.length === 0;
+  const split = computePaymentSplit(form.price, isFirstPayment, client.captador_id, client.entrenador_id);
+
+  return (
+    <div>
+      <button onClick={onClose} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:14, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ fontSize: 18, fontWeight: 900, color: t.text, marginBottom: 4 }}>
+        💰 {existingSub ? "Gestionar plan" : "Asignar plan"}: {client.name}
+      </div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>
+        Captador: {adminName(client.captador_id)} · Entrenador: {adminName(client.entrenador_id)}
+      </div>
+
+      {!client.captador_id || !client.entrenador_id ? (
+        <Card style={{ marginBottom: 16, background: "rgba(240,160,48,0.08)", border: "1.5px solid rgba(240,160,48,0.25)" }}>
+          <div style={{ fontSize: 12, color: "#f0a030", fontWeight: 700, marginBottom: 4 }}>⚠️ Faltan datos para repartir</div>
+          <div style={{ fontSize: 11, color: t.textSub }}>Asigna captador y entrenador en el perfil del cliente para que el reparto se haga correctamente.</div>
+        </Card>
+      ) : null}
+
+      {/* Form */}
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, marginBottom: 14 }}>📋 PLAN</div>
+
+        {/* Plan type */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>TIPO DE PLAN</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            {Object.entries(PLAN_LABELS).map(([k, l]) => (
+              <button key={k} onClick={() => onPlanChange(k)}
+                style={{ background: form.plan_type === k ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${form.plan_type === k ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 8, padding: "10px", cursor: "pointer", color: form.plan_type === k ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Price */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>PRECIO (TOKENS)</div>
+          <input type="number" value={form.price} onChange={e => setField("price", e.target.value)}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}/>
+        </div>
+
+        {/* Start date */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>FECHA DE INICIO DEL SERVICIO</div>
+          <input type="date" value={form.start_date} onChange={e => setField("start_date", e.target.value)}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}/>
+        </div>
+
+        {/* Payment date */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>FECHA DEL PAGO</div>
+          <input type="date" value={form.last_payment_date} onChange={e => setField("last_payment_date", e.target.value)}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}/>
+        </div>
+
+        <div style={{ background: t.bgElevated, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: t.textSub, marginBottom: 4 }}>
+          📅 Próxima renovación: <strong style={{ color: t.text }}>{fmtDate(next_renewal)}</strong>
+        </div>
+      </Card>
+
+      {/* Split preview */}
+      <Card accent style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, marginBottom: 12 }}>
+          💸 REPARTO {isFirstPayment ? "(PRIMER PAGO)" : "(RENOVACIÓN)"}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: t.textSub }}>Desarrollo app (5%)</span>
+            <strong style={{ color: t.text }}>{split.app} tk</strong>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: t.textSub }}>Glute Factoryy (50%)</span>
+            <strong style={{ color: t.text }}>{split.company} tk</strong>
+          </div>
+          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 6, marginTop: 4 }}>
+            <div style={{ fontSize: 10, color: t.textDim, fontWeight: 700, marginBottom: 4 }}>POOL ADMINS ({split.adminPool} tk)</div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: t.textSub }}>👋 Captador {client.captador_id ? `(${adminName(client.captador_id)})` : "(sin asignar)"}</span>
+              <strong style={{ color: t.text }}>{split.captador} tk</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+              <span style={{ color: t.textSub }}>👨‍🏫 Entrenador {client.entrenador_id ? `(${adminName(client.entrenador_id)})` : "(sin asignar)"}</span>
+              <strong style={{ color: t.text }}>{split.entrenador} tk</strong>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Actions */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <Btn onClick={registerPayment} disabled={saving}>
+          {saving ? "Guardando..." : (existingSub ? "✓ Marcar como pagado (renovar)" : "✓ Registrar pago y activar")}
+        </Btn>
+        {existingSub && (
+          <Btn onClick={saveSubscription} variant="ghost" disabled={saving}>
+            Solo guardar cambios (sin registrar pago)
+          </Btn>
+        )}
+        {existingSub && (
+          <Btn onClick={cancelSub} variant="ghost" style={{ color: t.danger }}>
+            Cancelar suscripción
+          </Btn>
+        )}
+      </div>
+
+      {/* History */}
+      {history.length > 0 && (
+        <div style={{ marginTop: 22 }}>
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>HISTORIAL DE PAGOS ({history.length})</div>
+          {history.map(p => (
+            <Card key={p.id} style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>
+                    {fmtDate(p.payment_date)} · {PLAN_LABELS[p.plan_type] || p.plan_type}
+                    {p.is_first_payment && <span style={{ marginLeft: 6, fontSize: 9, color: t.accent, background: t.accentAlpha, padding: "1px 5px", borderRadius: 4, fontWeight: 700 }}>1ª VENTA</span>}
+                  </div>
+                  <div style={{ fontSize: 10, color: t.textSub, marginTop: 2 }}>
+                    Periodo: {fmtDate(p.period_start)} → {fmtDate(p.period_end)}
+                  </div>
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 900, color: t.accent }}>{p.amount} tk</div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── AdminLibrary — hub for all reusable resources ────────────────────────────
 const AdminLibrary = ({ onBack, onRoutineTpls, onExercises, onBaseDiets, onFoods }) => {
   const tile = (icon, label, desc, onClick, color = t.accent) => (
@@ -3248,6 +3702,7 @@ const AdminApp = () => {
     if (view === "exercises") return "💪 Ejercicios";
     if (view === "routinetpls") return "📋 Plantillas de rutinas";
     if (view === "library") return "📚 Biblioteca";
+    if (view === "payments") return "💰 Pagos";
     return sel?.name;
   };
 
@@ -3296,7 +3751,8 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} onLibrary={()=>setView("library")} onErrors={()=>setView("errors")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} onLibrary={()=>setView("library")} onErrors={()=>setView("errors")} onPayments={()=>setView("payments")}/>}
+        {view === "payments"  && <AdminPayments onBack={() => setView("list")} db={db} onSelClient={(id) => { setSelId(id); setView("detail"); }}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} isSuperAdmin={isSuperAdmin}/>}
@@ -3315,7 +3771,7 @@ const AdminApp = () => {
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors, onPayments }) => {
   const { currentUser } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
@@ -3413,18 +3869,25 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors 
       ))}
     </div>
 
-    {/* Two main entry buttons: Library + Errors */}
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+    {/* Three main entry buttons: Library + Payments + Errors */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
       <button onClick={onLibrary}
-        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", fontFamily: "inherit" }}>
-        <div style={{ fontSize: 24 }}>📚</div>
-        <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Biblioteca</div>
-        <div style={{ fontSize: 10, color: t.textSub, textAlign: "center", lineHeight: 1.3 }}>Rutinas · Ejercicios<br/>Dietas · Alimentos</div>
+        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", fontFamily: "inherit" }}>
+        <div style={{ fontSize: 22 }}>📚</div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Biblioteca</div>
+        <div style={{ fontSize: 9, color: t.textSub, textAlign: "center", lineHeight: 1.3 }}>Rutinas · Dietas<br/>Alimentos · Ejercicios</div>
+      </button>
+
+      <button onClick={onPayments}
+        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", fontFamily: "inherit" }}>
+        <div style={{ fontSize: 22 }}>💰</div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Pagos</div>
+        <div style={{ fontSize: 9, color: t.textSub, textAlign: "center", lineHeight: 1.3 }}>Suscripciones<br/>y renovaciones</div>
       </button>
 
       <button onClick={onErrors}
-        style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 12, padding: "14px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", fontFamily: "inherit", position: "relative" }}>
-        <div style={{ fontSize: 24, position: "relative" }}>
+        style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 12, padding: "12px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", fontFamily: "inherit", position: "relative" }}>
+        <div style={{ fontSize: 22, position: "relative" }}>
           🐛
           {errorCount > 0 && (
             <div style={{ position: "absolute", top: -6, right: -10, background: t.danger, color: "white", borderRadius: 10, minWidth: 18, height: 18, fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
@@ -3432,9 +3895,9 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors 
             </div>
           )}
         </div>
-        <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Errores</div>
-        <div style={{ fontSize: 10, color: errorCount > 0 ? t.danger : t.textSub, textAlign: "center", lineHeight: 1.3 }}>
-          {errorCount > 0 ? `${errorCount} sin resolver` : "Todo en orden"}
+        <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Errores</div>
+        <div style={{ fontSize: 9, color: errorCount > 0 ? t.danger : t.textSub, textAlign: "center", lineHeight: 1.3 }}>
+          {errorCount > 0 ? `${errorCount} sin resolver` : "Todo OK"}
         </div>
       </button>
     </div>
@@ -3701,8 +4164,14 @@ const AEditProfile = ({ client, db, setDb }) => {
   const [resetDone, setResetDone] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [copied, setCopied] = useState(false);
+  const [admins, setAdmins] = useState([]);
 
   useEffect(() => { setF({...client}); setSaved(false); setResetDone(false); setNewPassword(""); }, [client.id]);
+  useEffect(() => {
+    (async () => {
+      try { const rows = await sb.select("admins", "?select=id,name"); setAdmins(rows || []); } catch {}
+    })();
+  }, []);
 
   const save = async () => {
     const vErr = validateAll([
@@ -3722,6 +4191,8 @@ const AEditProfile = ({ client, db, setDb }) => {
       goal: f.goal, personal_notes: f.personalNotes,
       injuries: f.injuries, status: f.status || "active",
       start_date: f.startDate, avatar: f.avatar,
+      captador_id: f.captador_id || null,
+      entrenador_id: f.entrenador_id || null,
     });
   };
 
@@ -3823,6 +4294,30 @@ const AEditProfile = ({ client, db, setDb }) => {
       <Field label="OBJETIVO" {...fld("goal")}/>
       <Field label="NOTAS PERSONALES" {...fld("personalNotes")} multiline rows={3}/>
       <Field label="LESIONES / LIMITACIONES" {...fld("injuries")} multiline rows={3}/>
+
+      {/* Asignación admins */}
+      <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14, marginTop: 8, marginBottom: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 ASIGNACIÓN PARA REPARTO DE PAGOS</div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👋 CAPTADOR</div>
+          <select value={f.captador_id || ""} onChange={e => setF(p => ({ ...p, captador_id: e.target.value }))}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
+            <option value="">— Sin asignar —</option>
+            {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👨‍🏫 ENTRENADOR</div>
+          <select value={f.entrenador_id || ""} onChange={e => setF(p => ({ ...p, entrenador_id: e.target.value }))}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
+            <option value="">— Sin asignar —</option>
+            {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+      </div>
+
       <SaveBtn onSave={save} saved={saved}/>
     </div>
   );
@@ -5602,9 +6097,20 @@ const ANotesTab = ({ client, notes, db, setDb }) => {
 };
 
 const ANewClient = ({ db, setDb, onDone }) => {
-  const [f, setF] = useState({name:"",email:"",password:""});
+  const { currentUser } = useApp();
+  const [f, setF] = useState({name:"",email:"",password:"", captador_id: currentUser?.id || "", entrenador_id: currentUser?.id || ""});
   const [copied, setCopied] = useState(false);
+  const [admins, setAdmins] = useState([]);
   const fld = k => ({ value: f[k], onChange: v => setF(p=>({...p,[k]:v})) });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sb.select("admins", "?select=id,name");
+        setAdmins(rows || []);
+      } catch {}
+    })();
+  }, []);
 
   const genPassword = () => {
     const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
@@ -5630,7 +6136,7 @@ const ANewClient = ({ db, setDb, onDone }) => {
     const avatar = f.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase();
     setDb(p=>({
       ...p,
-      clients:[...p.clients,{id,userId:uid,avatar,status:"active",startDate,name:f.name,email:f.email,password:f.password,phone:"",age:0,height:0,goal:"",personalNotes:"",injuries:""}],
+      clients:[...p.clients,{id,userId:uid,avatar,status:"active",startDate,name:f.name,email:f.email,password:f.password,phone:"",age:0,height:0,goal:"",personalNotes:"",injuries:"",captador_id:f.captador_id,entrenador_id:f.entrenador_id}],
       users:[...p.users,{id:uid,email:f.email,password:f.password,role:"client",name:f.name,clientId:id}],
       weightHistory:{ ...p.weightHistory, [id]: [] },
       coachNotes:{ ...p.coachNotes, [id]: [] },
@@ -5639,6 +6145,8 @@ const ANewClient = ({ db, setDb, onDone }) => {
       id, user_id: uid, name: f.name, email: f.email,
       password: f.password, password_changed: false,
       status: "active", start_date: startDate, avatar,
+      captador_id: f.captador_id || null,
+      entrenador_id: f.entrenador_id || null,
     });
     onDone();
   };
@@ -5676,6 +6184,30 @@ const ANewClient = ({ db, setDb, onDone }) => {
         <div style={{fontSize:12,color:t.textSub,marginBottom:16,lineHeight:1.5}}>
           El cliente completará el resto de su perfil cuando inicie sesión por primera vez.
         </div>
+
+        {/* Asignación de admins */}
+        <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14, marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 ASIGNACIÓN PARA REPARTO DE PAGOS</div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👋 CAPTADOR (quien da de alta)</div>
+            <select value={f.captador_id || ""} onChange={e => setF(p => ({ ...p, captador_id: e.target.value }))}
+              style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
+              <option value="">— Sin asignar —</option>
+              {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👨‍🏫 ENTRENADOR (quien hace dietas + rutinas)</div>
+            <select value={f.entrenador_id || ""} onChange={e => setF(p => ({ ...p, entrenador_id: e.target.value }))}
+              style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
+              <option value="">— Sin asignar —</option>
+              {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </div>
+        </div>
+
         <div style={{display:"flex",gap:10}}>
           <Btn onClick={create}><Icon n="plus" s={16}/> Crear Cliente</Btn>
           <Btn onClick={onDone} variant="ghost">Cancelar</Btn>
