@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.5.14.1";
+const APP_VERSION = "5.6.1";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -220,7 +220,6 @@ const validateAll = (checks) => {
   return null;
 };
 
-// ─── PAYMENT HELPERS ──────────────────────────────────────────────────────────
 // Default prices per plan (in tokens)
 const PLAN_PRICES = { mensual: 50, trimestral: 135, semestral: 250, anual: 480 };
 const PLAN_LABELS = { mensual: "Mensual", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual" };
@@ -272,6 +271,47 @@ const computePaymentSplit = (amount, isFirstPayment, captadorId, entrenadorId) =
   if (entrenadorId) sharesByAdmin[entrenadorId] = (sharesByAdmin[entrenadorId] || 0) + entrenador;
   else pending.entrenador = entrenador;
   return { app, company, adminPool, captador, entrenador, sharesByAdmin, pending };
+};
+
+// Check renewals and send notifications (warning_3days + expired) — runs once per app load.
+// Uses payment_notifications_sent to deduplicate across sessions/admins.
+const checkRenewalNotifications = async (subs, clients) => {
+  if (!subs || subs.length === 0) return;
+  const today = new Date();
+  for (const sub of subs) {
+    if (!sub.active || !sub.next_renewal_date) continue;
+    const client = (clients || []).find(c => c.id === sub.client_id);
+    const clientName = client?.name || "Cliente";
+    const status = getSubStatus(sub, today);
+    let notifType = null, title = "", body = "";
+    if (status.status === "warning" && status.days >= 0 && status.days <= 3) {
+      notifType = "warning_3days";
+      title = `⏰ ${clientName} vence en ${status.days}d`;
+      body = `El plan ${PLAN_LABELS[sub.plan_type] || sub.plan_type} de ${clientName} vence el ${sub.next_renewal_date}.`;
+    } else if (status.status === "overdue" && status.days < 0 && status.days >= -1) {
+      // Today is the day after renewal date — first overdue notification
+      notifType = "expired";
+      title = `🔔 ${clientName}: plan vencido`;
+      body = `El plan de ${clientName} venció el ${sub.next_renewal_date}. Cobrar y renovar.`;
+    }
+    if (!notifType) continue;
+    try {
+      // Check if notification already sent for this renewal date
+      const existing = await sb.select("payment_notifications_sent",
+        `?client_id=eq.${sub.client_id}&notif_type=eq.${notifType}&for_renewal_date=eq.${sub.next_renewal_date}`);
+      if (existing && existing.length > 0) continue;
+      // Mark as sent (deduplication)
+      await sb.insert("payment_notifications_sent", {
+        client_id: sub.client_id,
+        notif_type: notifType,
+        for_renewal_date: sub.next_renewal_date,
+      });
+      // Notify all admins
+      await notifyAllAdmins(null, "payment", title, body, "client", sub.client_id);
+    } catch (e) {
+      // ignore — don't block app load
+    }
+  }
 };
 
 const mapCheckinRow = r => {
@@ -1431,22 +1471,23 @@ const SECTION_CONFIG = {
 // Section block (protein / carbs / fats / extras / intraWorkout)
 const MealSection = ({ section }) => {
   const cfg = SECTION_CONFIG[section.type] || SECTION_CONFIG.extras;
+  const items = section.items || [];
   return (
     <div style={{ background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
       {/* Section header */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <span style={{ fontSize: 15 }}>{cfg.emoji}</span>
         <span style={{ fontSize: 11, fontWeight: 800, color: cfg.color, letterSpacing: "0.07em", textTransform: "uppercase" }}>{section.title || cfg.label}</span>
-        {(section.type === "protein" || section.type === "carbs" || section.type === "fats" || section.type === "veggies" || section.type === "fruits") && section.items.length > 1 && (
+        {(section.type === "protein" || section.type === "carbs" || section.type === "fats" || section.type === "fat" || section.type === "veggies" || section.type === "fruits") && items.length > 1 && (
           <span style={{ fontSize: 10, color: cfg.color, opacity: 0.6, marginLeft: "auto" }}>Elige 1 opción</span>
         )}
       </div>
       {/* Items */}
       <div>
-        {section.items.map((item, i) => {
+        {items.map((item, i) => {
           const hasComponents = item.components && item.components.length > 1;
           return (
-            <div key={item.id || i} style={{ padding: "9px 0", borderBottom: i < section.items.length - 1 ? `1px solid rgba(255,255,255,0.05)` : "none" }}>
+            <div key={item.id || i} style={{ padding: "9px 0", borderBottom: i < items.length - 1 ? `1px solid rgba(255,255,255,0.05)` : "none" }}>
               {hasComponents ? (
                 <>
                   <div style={{ fontSize: 11, fontWeight: 700, color: cfg.color, letterSpacing: "0.04em", marginBottom: 6 }}>OPCIÓN {String.fromCharCode(65 + i)} · combinación</div>
@@ -1820,28 +1861,13 @@ const AdminBaseDiets = ({ onBack }) => {
 
 // ─── BaseDietEditor — same editor as AEditDiet but saves to base_diets ───────
 const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, currentUser, onBack }) => {
-  // Upgrade existing meals to include veggies + fruits
-  const upgradeMeals = (mls) => {
-    if (!mls || !Array.isArray(mls)) return mls;
-    return mls.map(m => {
-      const types = (m.sections || []).map(s => s.type);
-      const newSections = [...(m.sections || [])];
-      if (!types.includes("veggies")) {
-        newSections.push({ id: "s-v-" + (m.id || Date.now()) + Math.random().toString(36).slice(2, 5), type: "veggies", title: "Verduras", items: [] });
-      }
-      if (!types.includes("fruits")) {
-        newSections.push({ id: "s-r-" + (m.id || Date.now()) + Math.random().toString(36).slice(2, 5), type: "fruits", title: "Frutas", items: [] });
-      }
-      return { ...m, sections: newSections };
-    });
-  };
-  const [meals, setMeals] = useState(upgradeMeals(initialMeals));
+  const [meals, setMeals] = useState(initialMeals);
   const [openMeal, setOpenMeal] = useState(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Re-upgrade if initialMeals reference changes (useful for async loads)
-  useEffect(() => { setMeals(upgradeMeals(initialMeals)); }, [initialMeals]);
+  // Re-load meals if initialMeals reference changes (async loads)
+  useEffect(() => { setMeals(initialMeals); }, [initialMeals]);
 
   // Defaults helper (reused)
   const mkDefaultMeals = () => {
@@ -1918,9 +1944,17 @@ const BaseDietEditor = ({ baseDietId, initialMeals, baseDietName, allFoods, curr
 
   const save = async () => {
     setSaving(true);
+    // Strip empty veggies/fruits sections before persisting
+    const cleanedMeals = (meals || []).map(m => ({
+      ...m,
+      sections: (m.sections || []).filter(s => {
+        if ((s.type === "veggies" || s.type === "fruits") && (!s.items || s.items.length === 0)) return false;
+        return true;
+      }),
+    }));
     await sb.upsert("base_diets", {
       id: baseDietId, name: baseDietName, gender: baseDietId.startsWith("female") ? "female" : "male",
-      meals, updated_by: currentUser.id, updated_at: new Date().toISOString(),
+      meals: cleanedMeals, updated_by: currentUser.id, updated_at: new Date().toISOString(),
     });
     setSaved(true); setSaving(false);
     setTimeout(() => setSaved(false), 2000);
@@ -2293,20 +2327,445 @@ const AdminErrors = ({ onBack }) => {
   );
 };
 
+// ─── AdminPaymentSummary — monthly summary with admin breakdown ───────────────
+const AdminPaymentSummary = ({ onBack, db }) => {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth()); // 0-11
+  const [annualMode, setAnnualMode] = useState(false);
+  const [tab, setTab] = useState("summary"); // "summary" | "chart" | "recipients"
+  const [payments, setPayments] = useState([]);
+  const [chartData, setChartData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const monthNames = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const monthAbbr = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      let from, to;
+      if (annualMode) {
+        from = `${year}-01-01`;
+        to   = `${year}-12-31`;
+      } else {
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        from = `${year}-${String(month+1).padStart(2,'0')}-01`;
+        to   = `${year}-${String(month+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+      }
+      const rows = await sb.select("payment_history",
+        `?payment_date=gte.${from}&payment_date=lte.${to}&order=payment_date.desc`);
+      setPayments(rows || []);
+
+      // Build chart data
+      if (annualMode) {
+        // 12 months
+        const totals = Array(12).fill(0);
+        (rows || []).forEach(p => {
+          const m = new Date(p.payment_date + "T00:00:00").getMonth();
+          totals[m] += parseFloat(p.amount) || 0;
+        });
+        setChartData(totals.map((v, i) => ({ label: monthAbbr[i], value: v })));
+      } else {
+        // Days of the month
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const totals = Array(lastDay).fill(0);
+        (rows || []).forEach(p => {
+          const d = new Date(p.payment_date + "T00:00:00").getDate();
+          totals[d - 1] += parseFloat(p.amount) || 0;
+        });
+        setChartData(totals.map((v, i) => ({ label: String(i + 1), value: v })));
+      }
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [year, month, annualMode]);
+
+  // Build admin name lookup
+  const adminMap = {};
+  (db.users || []).forEach(u => { if (u.role === "admin" || u.role === "superadmin") adminMap[u.id] = u.name; });
+  const clientMap = {};
+  (db.clients || []).forEach(c => { clientMap[c.id] = c.name; });
+
+  // Calculate totals
+  let totalIncome = 0, totalApp = 0, totalCompany = 0, totalAdminPool = 0;
+  let firstSales = 0, renewals = 0;
+  const adminTotals = {}; // adminId -> { captador, entrenador, total }
+  const recipientTotals = {}; // label -> total
+  const methodTotals = {}; // label -> total
+
+  payments.forEach(p => {
+    const amount = parseFloat(p.amount) || 0;
+    const split = computePaymentSplit(amount, p.is_first_payment, p.captador_id, p.entrenador_id);
+    totalIncome += amount;
+    totalApp += split.app;
+    totalCompany += split.company;
+    totalAdminPool += split.adminPool;
+    if (p.is_first_payment) firstSales++; else renewals++;
+
+    // Per-admin breakdown
+    if (p.captador_id) {
+      if (!adminTotals[p.captador_id]) adminTotals[p.captador_id] = { captador: 0, entrenador: 0, total: 0 };
+      adminTotals[p.captador_id].captador += split.captador;
+      adminTotals[p.captador_id].total += split.captador;
+    }
+    if (p.entrenador_id) {
+      if (!adminTotals[p.entrenador_id]) adminTotals[p.entrenador_id] = { captador: 0, entrenador: 0, total: 0 };
+      adminTotals[p.entrenador_id].entrenador += split.entrenador;
+      adminTotals[p.entrenador_id].total += split.entrenador;
+    }
+
+    // Per-recipient and per-method
+    if (p.paid_to) recipientTotals[p.paid_to] = (recipientTotals[p.paid_to] || 0) + amount;
+    if (p.payment_method) methodTotals[p.payment_method] = (methodTotals[p.payment_method] || 0) + amount;
+  });
+
+  // Round totals to 2 decimals
+  const round = n => Math.round(n * 100) / 100;
+  totalApp = round(totalApp);
+  totalCompany = round(totalCompany);
+  totalAdminPool = round(totalAdminPool);
+
+  const fmtDate = ds => {
+    if (!ds) return "—";
+    const d = new Date(ds + "T00:00:00");
+    return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
+  };
+
+  const navigate = dir => {
+    if (annualMode) {
+      setYear(y => y + dir);
+    } else {
+      let m = month + dir;
+      let y = year;
+      if (m < 0) { m = 11; y -= 1; }
+      if (m > 11) { m = 0; y += 1; }
+      setMonth(m); setYear(y);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 14 }}>📊 Resumen de pagos</div>
+
+      {/* Toggle annual / monthly */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <button onClick={() => setAnnualMode(false)}
+          style={{ flex: 1, background: !annualMode ? t.accentAlpha : t.bgCard, border: `1.5px solid ${!annualMode ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: !annualMode ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+          Mensual
+        </button>
+        <button onClick={() => setAnnualMode(true)}
+          style={{ flex: 1, background: annualMode ? t.accentAlpha : t.bgCard, border: `1.5px solid ${annualMode ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: annualMode ? t.accent : t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+          Anual
+        </button>
+      </div>
+
+      {/* Period navigation */}
+      <Card accent style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <button onClick={() => navigate(-1)}
+            style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+          <div style={{ textAlign: "center", flex: 1 }}>
+            <div style={{ fontSize: 16, fontWeight: 900, color: t.text }}>
+              {annualMode ? year : `${monthNames[month]} ${year}`}
+            </div>
+            <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>{payments.length} pago{payments.length === 1 ? "" : "s"}</div>
+          </div>
+          <button onClick={() => navigate(1)}
+            style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", color: t.text, fontSize: 18, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+        </div>
+      </Card>
+
+      {/* TABS: Resumen / Gráfica / Quién recibe qué */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14, background: t.bgCard, borderRadius: 10, padding: 4 }}>
+        {[
+          { k: "summary", label: "📋 Resumen" },
+          { k: "chart",   label: "📈 Gráfica" },
+          { k: "recipients", label: "👥 Reparto" },
+        ].map(opt => (
+          <button key={opt.k} onClick={() => setTab(opt.k)}
+            style={{ flex: 1, background: tab === opt.k ? t.accentAlpha : "transparent", border: "none", borderRadius: 8, padding: "9px 4px", cursor: "pointer", color: tab === opt.k ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30 }}>Cargando...</div>}
+
+      {!loading && payments.length === 0 && (
+        <Empty icon="check" text="No hay pagos en este periodo"/>
+      )}
+
+      {!loading && payments.length > 0 && tab === "summary" && (
+        <>
+          {/* Total */}
+          <Card style={{ marginBottom: 14, background: "linear-gradient(135deg, rgba(30,155,191,0.12), rgba(30,155,191,0.04))", border: "1.5px solid rgba(30,155,191,0.25)" }}>
+            <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>💰 INGRESOS TOTALES</div>
+            <div style={{ fontSize: 36, fontWeight: 900, color: t.text, letterSpacing: "-0.02em" }}>{round(totalIncome)} <span style={{ fontSize: 18, color: t.textSub, fontWeight: 700 }}>tk</span></div>
+            <div style={{ fontSize: 12, color: t.textSub, marginTop: 6 }}>
+              {firstSales} alta{firstSales !== 1 ? "s" : ""} · {renewals} renovación{renewals !== 1 ? "es" : ""}
+            </div>
+          </Card>
+
+          {/* Reparto general */}
+          <Card style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>💸 REPARTO GENERAL</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: t.textSub }}>Desarrollo app (5%)</span>
+                <strong style={{ color: t.text }}>{totalApp} tk</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: t.textSub }}>Glute Factoryy (50% del 95%)</span>
+                <strong style={{ color: t.text }}>{totalCompany} tk</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${t.border}`, paddingTop: 8, marginTop: 4 }}>
+                <span style={{ color: t.text, fontWeight: 700 }}>Pool admins (50% del 95%)</span>
+                <strong style={{ color: t.accent }}>{totalAdminPool} tk</strong>
+              </div>
+            </div>
+          </Card>
+
+          {/* Per admin */}
+          <Card style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>👥 POR ADMINISTRADOR</div>
+            {Object.keys(adminTotals).length === 0 ? (
+              <div style={{ fontSize: 12, color: t.textDim, fontStyle: "italic" }}>Ningún admin asignado en este periodo</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {Object.entries(adminTotals).sort((a,b) => b[1].total - a[1].total).map(([id, t2]) => (
+                  <div key={id}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <strong style={{ color: t.text, fontSize: 14 }}>{adminMap[id] || "Admin desconocido"}</strong>
+                      <strong style={{ color: t.accent, fontSize: 16 }}>{round(t2.total)} tk</strong>
+                    </div>
+                    <div style={{ fontSize: 10, color: t.textDim, marginTop: 3, display: "flex", gap: 10 }}>
+                      <span>👋 Captador: {round(t2.captador)} tk</span>
+                      <span>👨‍🏫 Entrenador: {round(t2.entrenador)} tk</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Per recipient */}
+          {Object.keys(recipientTotals).length > 0 && (
+            <Card style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>💼 INGRESADO A</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {Object.entries(recipientTotals).sort((a,b) => b[1] - a[1]).map(([label, val]) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: t.textSub, fontSize: 13 }}>{label}</span>
+                    <strong style={{ color: t.text, fontSize: 14 }}>{round(val)} tk</strong>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Per method */}
+          {Object.keys(methodTotals).length > 0 && (
+            <Card style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>💳 POR FORMA DE PAGO</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {Object.entries(methodTotals).sort((a,b) => b[1] - a[1]).map(([label, val]) => (
+                  <div key={label} style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: t.textSub, fontSize: 13 }}>{label}</span>
+                    <strong style={{ color: t.text, fontSize: 14 }}>{round(val)} tk</strong>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Detail of payments */}
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>📋 DETALLE</div>
+          {payments.map(p => (
+            <Card key={p.id} style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>
+                    {clientMap[p.client_id] || "Cliente eliminado"}
+                    {p.is_first_payment && <span style={{ marginLeft: 6, fontSize: 9, color: t.accent, background: t.accentAlpha, padding: "1px 5px", borderRadius: 4, fontWeight: 700 }}>1ª</span>}
+                  </div>
+                  <div style={{ fontSize: 10, color: t.textSub, marginTop: 2 }}>
+                    {fmtDate(p.payment_date)} · {PLAN_LABELS[p.plan_type] || p.plan_type}
+                    {p.paid_to && ` · 💼 ${p.paid_to}`}
+                    {p.payment_method && ` · 💳 ${p.payment_method}`}
+                  </div>
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 900, color: t.accent, marginLeft: 8 }}>{round(p.amount)} tk</div>
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+
+      {/* TAB: GRÁFICA */}
+      {!loading && payments.length > 0 && tab === "chart" && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 14 }}>
+            📈 INGRESOS POR {annualMode ? "MES" : "DÍA"}
+          </div>
+          {(() => {
+            const maxVal = Math.max(...chartData.map(d => d.value), 1);
+            const totalChart = chartData.reduce((a, b) => a + b.value, 0);
+            const chartW = 320;
+            const chartH = 180;
+            const padL = 32;
+            const padB = 28;
+            const innerW = chartW - padL - 8;
+            const innerH = chartH - padB - 12;
+            const barCount = chartData.length;
+            const barW = (innerW / barCount) - 2;
+            return (
+              <>
+                <div style={{ overflowX: "auto", marginBottom: 12 }}>
+                  <svg width={chartW} height={chartH} style={{ display: "block" }}>
+                    {[0, 0.5, 1].map((p, i) => {
+                      const y = 12 + innerH * (1 - p);
+                      const val = Math.round(maxVal * p);
+                      return (
+                        <g key={i}>
+                          <line x1={padL} y1={y} x2={chartW - 8} y2={y} stroke={t.border} strokeWidth="0.5"/>
+                          <text x={padL - 4} y={y + 3} fill={t.textDim} fontSize="9" textAnchor="end" fontFamily="inherit">{val}</text>
+                        </g>
+                      );
+                    })}
+                    {chartData.map((d, i) => {
+                      const x = padL + (i * (innerW / barCount));
+                      const h = maxVal > 0 ? (d.value / maxVal) * innerH : 0;
+                      const y = 12 + innerH - h;
+                      const isHigh = d.value > 0;
+                      return (
+                        <g key={i}>
+                          {isHigh && (
+                            <rect x={x + 1} y={y} width={Math.max(barW, 2)} height={h}
+                              fill="#1E9BBF" rx="2"/>
+                          )}
+                          {(barCount <= 12 || i % Math.ceil(barCount / 12) === 0) && (
+                            <text x={x + barW/2 + 1} y={chartH - 8} fill={t.textDim} fontSize="9" textAnchor="middle" fontFamily="inherit">
+                              {d.label}
+                            </text>
+                          )}
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+                <div style={{ background: t.bgElevated, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 12, color: t.textSub, fontWeight: 600 }}>Total {annualMode ? "del año" : "del mes"}</span>
+                  <strong style={{ fontSize: 18, color: t.accent }}>{Math.round(totalChart * 100) / 100} tk</strong>
+                </div>
+                {(() => {
+                  const sortedTop = [...chartData].map((d, i) => ({ ...d, idx: i })).sort((a, b) => b.value - a.value).slice(0, 3).filter(d => d.value > 0);
+                  if (sortedTop.length === 0) return null;
+                  return (
+                    <div style={{ marginTop: 14 }}>
+                      <div style={{ fontSize: 10, color: t.textDim, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>🏆 MEJORES {annualMode ? "MESES" : "DÍAS"}</div>
+                      {sortedTop.map((d, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12, borderBottom: i < sortedTop.length - 1 ? `1px solid ${t.border}` : "none" }}>
+                          <span style={{ color: t.textSub }}>
+                            {i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"} {annualMode ? monthNames[d.idx] : `Día ${d.label}`}
+                          </span>
+                          <strong style={{ color: t.text }}>{Math.round(d.value * 100) / 100} tk</strong>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </>
+            );
+          })()}
+        </Card>
+      )}
+
+      {/* TAB: QUIÉN RECIBE QUÉ */}
+      {!loading && payments.length > 0 && tab === "recipients" && (
+        <>
+          <Card style={{ marginBottom: 12, background: "linear-gradient(135deg, rgba(30,155,191,0.12), rgba(30,155,191,0.04))", border: "1.5px solid rgba(30,155,191,0.25)" }}>
+            <div style={{ fontSize: 10, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 6 }}>💰 TOTAL FACTURADO</div>
+            <div style={{ fontSize: 30, fontWeight: 900, color: t.text }}>{round(totalIncome)} <span style={{ fontSize: 16, color: t.textSub, fontWeight: 700 }}>tk</span></div>
+            <div style={{ fontSize: 11, color: t.textSub, marginTop: 4 }}>{annualMode ? `Año ${year}` : `${monthNames[month]} ${year}`}</div>
+          </Card>
+
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>🏢 ESTRUCTURA</div>
+          <Card style={{ marginBottom: 8, borderLeft: "3px solid #f0a030" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>📱 Desarrollo de la app</div>
+                <div style={{ fontSize: 10, color: t.textSub, marginTop: 2 }}>5% del total facturado</div>
+              </div>
+              <strong style={{ fontSize: 18, color: "#f0a030" }}>{totalApp} tk</strong>
+            </div>
+          </Card>
+          <Card style={{ marginBottom: 16, borderLeft: "3px solid #5fb98e" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>🏋️ Glute Factoryy</div>
+                <div style={{ fontSize: 10, color: t.textSub, marginTop: 2 }}>50% del 95% restante</div>
+              </div>
+              <strong style={{ fontSize: 18, color: "#5fb98e" }}>{totalCompany} tk</strong>
+            </div>
+          </Card>
+
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>👥 ADMINISTRADORES</div>
+          {Object.keys(adminTotals).length === 0 ? (
+            <Card style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: t.textDim, fontStyle: "italic", textAlign: "center", padding: "10px 0" }}>Ningún administrador asignado en este periodo</div>
+            </Card>
+          ) : (
+            Object.entries(adminTotals).sort((a,b) => b[1].total - a[1].total).map(([id, t2], idx) => (
+              <Card key={id} style={{ marginBottom: 8, borderLeft: `3px solid ${idx === 0 ? "#1E9BBF" : "rgba(30,155,191,0.4)"}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <strong style={{ color: t.text, fontSize: 14 }}>
+                    {idx === 0 ? "🏆 " : ""}{adminMap[id] || "Admin desconocido"}
+                  </strong>
+                  <strong style={{ color: t.accent, fontSize: 18 }}>{round(t2.total)} tk</strong>
+                </div>
+                <div style={{ display: "flex", gap: 10, fontSize: 11, color: t.textSub }}>
+                  <span>👋 Captador: <strong style={{ color: t.text }}>{round(t2.captador)}</strong></span>
+                  <span>👨‍🏫 Entrenador: <strong style={{ color: t.text }}>{round(t2.entrenador)}</strong></span>
+                </div>
+              </Card>
+            ))
+          )}
+
+          <Card style={{ marginTop: 14, background: t.bgElevated }}>
+            <div style={{ fontSize: 10, color: t.textDim, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 6 }}>VERIFICACIÓN</div>
+            <div style={{ fontSize: 12, color: t.textSub, lineHeight: 1.7 }}>
+              {totalApp} (app) + {totalCompany} (empresa) + {round(Object.values(adminTotals).reduce((s, a) => s + a.total, 0))} (admins) = <strong style={{ color: t.accent }}>{round(totalApp + totalCompany + Object.values(adminTotals).reduce((s, a) => s + a.total, 0))} tk</strong>
+            </div>
+            <div style={{ fontSize: 10, color: t.textDim, marginTop: 4 }}>
+              {Math.abs(totalIncome - (totalApp + totalCompany + Object.values(adminTotals).reduce((s, a) => s + a.total, 0))) < 0.5 ? "✓ Cuadra con el total facturado" : "⚠️ Algunos pagos no tienen captador/entrenador asignado"}
+            </div>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ─── AdminPayments — list of clients and their subscription status ───────────
-const AdminPayments = ({ onBack, db, onSelClient }) => {
-  const { currentUser } = useApp();
+const AdminPayments = ({ onBack, db, onSelClient, onSummary }) => {
+  const { currentUser, setSubscriptions: setCtxSubs } = useApp();
   const [subs, setSubs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [editing, setEditing] = useState(null); // { client, sub }
-  const [showSummary, setShowSummary] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
       const rows = await sb.select("client_subscriptions", "?order=next_renewal_date");
       setSubs(rows || []);
+      if (setCtxSubs) setCtxSubs(rows || []);
     } catch {}
     setLoading(false);
   };
@@ -2362,6 +2821,10 @@ const AdminPayments = ({ onBack, db, onSelClient }) => {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ fontSize: 22, fontWeight: 900, color: t.text }}>💰 Pagos</div>
+        <button onClick={onSummary}
+          style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 10, padding: "7px 12px", cursor: "pointer", color: t.accent, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+          📊 Resumen
+        </button>
       </div>
       <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>Gestión de suscripciones y renovaciones.</div>
 
@@ -2440,6 +2903,154 @@ const AdminPayments = ({ onBack, db, onSelClient }) => {
   );
 };
 
+// ─── AdminPaymentSettings — manage recipients and methods ────────────────────
+const AdminPaymentSettings = ({ onBack }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(null); // "recipient" | "method" | null
+  const [newLabel, setNewLabel] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const rows = await sb.select("payment_settings", "?order=type,display_order");
+      setItems(rows || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const addItem = async () => {
+    if (!newLabel.trim()) return;
+    const sameType = items.filter(i => i.type === showAdd);
+    const id = (showAdd === "recipient" ? "rec-" : "met-") + Date.now() + Math.random().toString(36).slice(2, 4);
+    try {
+      await sb.insert("payment_settings", {
+        id,
+        type: showAdd,
+        label: newLabel.trim().toUpperCase(),
+        display_order: sameType.length + 1,
+        active: true,
+      });
+      setNewLabel("");
+      setShowAdd(null);
+      await load();
+    } catch (e) {
+      alert("Error al añadir: " + (e?.message || ""));
+    }
+  };
+
+  const toggleActive = async (item) => {
+    try {
+      await sb.upsert("payment_settings", { ...item, active: !item.active });
+      await load();
+    } catch {}
+  };
+
+  const renameItem = async (item) => {
+    const newName = prompt("Nuevo nombre:", item.label);
+    if (!newName || !newName.trim() || newName === item.label) return;
+    try {
+      await sb.upsert("payment_settings", { ...item, label: newName.trim().toUpperCase() });
+      await load();
+    } catch {}
+  };
+
+  const deleteItem = async (item) => {
+    if (!confirm(`¿Eliminar "${item.label}"? Los pagos antiguos que lo usen mantendrán el nombre, pero ya no aparecerá como opción.`)) return;
+    try {
+      await sb.remove("payment_settings", "id", item.id);
+      await load();
+    } catch {}
+  };
+
+  const recipients = items.filter(i => i.type === "recipient");
+  const methods    = items.filter(i => i.type === "method");
+
+  const renderList = (list, type) => (
+    <>
+      {list.length === 0 && (
+        <div style={{ background: t.bgElevated, borderRadius: 10, padding: "14px", textAlign: "center", fontSize: 12, color: t.textSub, marginBottom: 8 }}>
+          No hay opciones configuradas todavía.
+        </div>
+      )}
+      {list.map(item => (
+        <Card key={item.id} style={{ marginBottom: 6, opacity: item.active ? 1 : 0.5 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1, fontSize: 14, fontWeight: 700, color: t.text }}>
+              {item.label}
+              {!item.active && <span style={{ marginLeft: 8, fontSize: 10, color: t.textDim, fontWeight: 600 }}>(desactivado)</span>}
+            </div>
+            <button onClick={() => toggleActive(item)}
+              style={{ background: item.active ? t.bgElevated : t.accentAlpha, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: item.active ? t.textSub : t.accent, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+              {item.active ? "Desactivar" : "Activar"}
+            </button>
+            <button onClick={() => renameItem(item)}
+              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.textSub, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              ✏️
+            </button>
+            <button onClick={() => deleteItem(item)}
+              style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Icon n="trash" s={12}/>
+            </button>
+          </div>
+        </Card>
+      ))}
+      {showAdd === type ? (
+        <Card accent style={{ marginBottom: 6 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder={type === "recipient" ? "Nombre (ej: ESPAIUP)" : "Método (ej: BIZUM)"}
+              autoFocus
+              onKeyDown={e => e.key === "Enter" && addItem()}
+              style={{ flex: 1, background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 10, padding: "10px 12px", color: t.text, fontSize: 13, fontFamily: "inherit", outline: "none", textTransform: "uppercase" }}/>
+            <button onClick={addItem}
+              style={{ background: t.accent, color: "white", border: "none", borderRadius: 10, padding: "0 14px", cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+              Añadir
+            </button>
+            <button onClick={() => { setShowAdd(null); setNewLabel(""); }}
+              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 10, padding: "0 12px", cursor: "pointer", color: t.textSub, fontSize: 12, fontFamily: "inherit" }}>
+              ✕
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <button onClick={() => setShowAdd(type)}
+          style={{ width: "100%", background: "none", border: `1px dashed ${t.border}`, borderRadius: 10, padding: "10px", cursor: "pointer", color: t.textSub, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+          + Añadir {type === "recipient" ? "destinatario" : "método"}
+        </button>
+      )}
+    </>
+  );
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>⚙️ Configuración de pagos</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 22 }}>Personaliza los destinatarios y métodos de pago disponibles al registrar un cobro.</div>
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30 }}>Cargando...</div>}
+
+      {!loading && (
+        <>
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>💼 PAGADO A</div>
+          <div style={{ marginBottom: 22 }}>
+            {renderList(recipients, "recipient")}
+          </div>
+
+          <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 8 }}>💳 FORMAS DE PAGO</div>
+          <div>
+            {renderList(methods, "method")}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ─── PaymentEditor — assign / manage a client subscription ───────────────────
 const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) => {
   const today = new Date().toISOString().slice(0, 10);
@@ -2460,7 +3071,6 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
   });
   const [history, setHistory] = useState([]);
   const [saving, setSaving] = useState(false);
-  const [showRegisterPayment, setShowRegisterPayment] = useState(false);
   const [recipients, setRecipients] = useState([]);
   const [methods, setMethods] = useState([]);
 
@@ -2748,128 +3358,6 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
   );
 };
 
-// ─── AdminPaymentSettings — manage recipients and payment methods ────────────
-const AdminPaymentSettings = ({ onBack }) => {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(null); // "recipient" | "method" | null
-  const [newLabel, setNewLabel] = useState("");
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const rows = await sb.select("payment_settings", "?order=type,display_order");
-      setItems(rows || []);
-    } catch {}
-    setLoading(false);
-  };
-
-  useEffect(() => { load(); }, []);
-
-  const addItem = async () => {
-    if (!newLabel.trim()) return alert("Pon un nombre");
-    const id = `${showAdd === "recipient" ? "rec" : "met"}-${Date.now().toString(36)}`;
-    const sameType = items.filter(i => i.type === showAdd);
-    const order = sameType.length > 0 ? Math.max(...sameType.map(i => i.display_order || 0)) + 1 : 1;
-    try {
-      await sb.insert("payment_settings", {
-        id, type: showAdd, label: newLabel.trim().toUpperCase(), display_order: order, active: true,
-      });
-      setNewLabel(""); setShowAdd(null);
-      await load();
-    } catch (e) {
-      alert("Error al añadir: " + (e?.message || ""));
-    }
-  };
-
-  const toggleActive = async (item) => {
-    try {
-      await sb.upsert("payment_settings", { ...item, active: !item.active });
-      await load();
-    } catch {}
-  };
-
-  const removeItem = async (item) => {
-    if (!confirm(`¿Eliminar "${item.label}"?\n\nLos pagos pasados que lo usaron seguirán mostrándolo igual.`)) return;
-    try {
-      await sb.remove("payment_settings", "id", item.id);
-      await load();
-    } catch {}
-  };
-
-  const renameItem = async (item) => {
-    const nv = prompt("Nuevo nombre:", item.label);
-    if (!nv || !nv.trim() || nv === item.label) return;
-    try {
-      await sb.upsert("payment_settings", { ...item, label: nv.trim().toUpperCase() });
-      await load();
-    } catch {}
-  };
-
-  const recipients = items.filter(i => i.type === "recipient");
-  const methods = items.filter(i => i.type === "method");
-
-  const renderList = (list, label, type) => (
-    <>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, marginTop: 6 }}>
-        <div style={{ fontSize: 11, color: t.textSub, fontWeight: 700, letterSpacing: "0.06em" }}>{label}</div>
-        <button onClick={() => { setShowAdd(type); setNewLabel(""); }}
-          style={{ background: t.accentAlpha, border: `1.5px solid rgba(30,155,191,0.3)`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", color: t.accent, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
-          + Añadir
-        </button>
-      </div>
-      {showAdd === type && (
-        <Card accent style={{ marginBottom: 10 }}>
-          <Field label="NOMBRE" value={newLabel} onChange={setNewLabel} placeholder={type === "recipient" ? "Ej: TRANSFERENCIA" : "Ej: STRIPE"}/>
-          <div style={{ display: "flex", gap: 6 }}>
-            <Btn onClick={addItem} size="sm">Guardar</Btn>
-            <Btn onClick={() => { setShowAdd(null); setNewLabel(""); }} size="sm" variant="ghost">Cancelar</Btn>
-          </div>
-        </Card>
-      )}
-      {list.length === 0 && <Empty icon="check" text="Aún no hay opciones"/>}
-      {list.map(it => (
-        <Card key={it.id} style={{ marginBottom: 6, opacity: it.active ? 1 : 0.5 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: t.text, flex: 1 }}>{it.label}</div>
-            {!it.active && <span style={{ fontSize: 10, color: t.textDim, background: t.bgElevated, padding: "2px 6px", borderRadius: 4 }}>Desactivado</span>}
-            <button onClick={() => toggleActive(it)}
-              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 10px", cursor: "pointer", color: t.textSub, fontSize: 10, fontWeight: 700, fontFamily: "inherit" }}>
-              {it.active ? "Desactivar" : "Activar"}
-            </button>
-            <button onClick={() => renameItem(it)}
-              style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.textSub, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              ✏️
-            </button>
-            <button onClick={() => removeItem(it)}
-              style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, width: 32, height: 32, cursor: "pointer", color: t.danger, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Icon n="trash" s={13}/>
-            </button>
-          </div>
-        </Card>
-      ))}
-    </>
-  );
-
-  return (
-    <div>
-      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
-        <Icon n="back" s={16}/> Volver
-      </button>
-      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>💼 Configuración de pagos</div>
-      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>Gestiona los destinatarios y formas de pago disponibles al registrar un pago.</div>
-
-      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30 }}>Cargando...</div>}
-
-      {!loading && (
-        <>
-          {renderList(recipients, "💼 PAGADO A (DESTINATARIOS)", "recipient")}
-          {renderList(methods, "💳 FORMAS DE PAGO", "method")}
-        </>
-      )}
-    </div>
-  );
-};
 
 // ─── AdminLibrary — hub for all reusable resources ────────────────────────────
 const AdminLibrary = ({ onBack, onRoutineTpls, onExercises, onBaseDiets, onFoods }) => {
@@ -3894,6 +4382,7 @@ const AdminApp = () => {
     if (view === "routinetpls") return "📋 Plantillas de rutinas";
     if (view === "library") return "📚 Biblioteca";
     if (view === "payments") return "💰 Pagos";
+    if (view === "paysummary") return "📊 Resumen de pagos";
     if (view === "paysettings") return "💼 Configuración de pagos";
     return sel?.name;
   };
@@ -3944,7 +4433,8 @@ const AdminApp = () => {
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
         {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} onLibrary={()=>setView("library")} onErrors={()=>setView("errors")} onPayments={()=>setView("payments")}/>}
-        {view === "payments"  && <AdminPayments onBack={() => setView("list")} db={db} onSelClient={(id) => { setSelId(id); setView("detail"); }}/>}
+        {view === "payments"  && <AdminPayments onBack={() => setView("list")} db={db} onSelClient={(id) => { setSelId(id); setView("detail"); }} onSummary={() => setView("paysummary")}/>}
+        {view === "paysummary" && <AdminPaymentSummary onBack={() => setView("payments")} db={db}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} onPaymentSettings={() => setView("paysettings")} isSuperAdmin={isSuperAdmin}/>}
@@ -3965,7 +4455,7 @@ const AdminApp = () => {
 };
 
 const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors, onPayments }) => {
-  const { currentUser } = useApp();
+  const { currentUser, subscriptions } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
   const [errorCount, setErrorCount] = useState(0);
@@ -4109,8 +4599,16 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
         if (clientCheckins[allDoneKeys[i]]) streak++;
         else break;
       }
+
+      // Payment subscription status
+      const sub = (subscriptions || []).find(s => s.client_id === c.id);
+      const subStatus = getSubStatus(sub);
+      const cardBorderLeft = subStatus.status === "overdue" ? `4px solid ${subStatus.color}` :
+                              subStatus.status === "warning" ? `4px solid ${subStatus.color}` :
+                              undefined;
+
       return (
-        <Card key={c.id} onClick={() => onSel(c.id)}>
+        <Card key={c.id} onClick={() => onSel(c.id)} style={cardBorderLeft ? { borderLeft: cardBorderLeft } : undefined}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ position: "relative" }}>
               <Av initials={c.avatar} size={50}/>
@@ -4120,7 +4618,10 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div style={{ fontSize: 16, fontWeight: 800, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>{c.name}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, maxWidth: "60%" }}>
+                  {subStatus.status === "overdue" && <span style={{ fontSize: 13 }}>⚠️</span>}
+                  <div style={{ fontSize: 16, fontWeight: 800, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   {unread > 0 && (
                     <div style={{ background: "#e05a5a", borderRadius: 20, minWidth: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 6px", fontSize: 11, fontWeight: 800, color: "white" }}>
@@ -4133,13 +4634,18 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
                 </div>
               </div>
               <div style={{ fontSize: 13, color: t.textSub, marginTop: 3 }}>{c.email}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12, color: t.textDim }}>
                   {c.goal}{lastW ? ` · ${lastW.weight} kg` : ""}
                 </span>
                 {streak >= 2 && (
                   <span style={{ fontSize: 11, fontWeight: 700, color: "#f0a030" }}>
                     🔥 {streak} sem.
+                  </span>
+                )}
+                {(subStatus.status === "overdue" || subStatus.status === "warning") && (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: subStatus.color, background: `${subStatus.color}22`, padding: "2px 6px", borderRadius: 5 }}>
+                    💰 {subStatus.label}
                   </span>
                 )}
               </div>
@@ -5420,28 +5926,10 @@ const MacroCalculator = ({ onAdd }) => {
 const AEditDiet = ({ client, diet: init, db, setDb }) => {
   const { customFoods } = useApp();
   const emptyDiet = { name:"", meals:[] };
-  // Upgrade old diets to include veggies + fruits sections
-  const upgradeDiet = (diet) => {
-    if (!diet || !diet.meals) return diet;
-    return {
-      ...diet,
-      meals: diet.meals.map(m => {
-        const types = (m.sections || []).map(s => s.type);
-        const newSections = [...(m.sections || [])];
-        if (!types.includes("veggies")) {
-          newSections.push({ id: "s-v-" + m.id + Math.random().toString(36).slice(2, 5), type: "veggies", title: "Verduras", items: [] });
-        }
-        if (!types.includes("fruits")) {
-          newSections.push({ id: "s-r-" + m.id + Math.random().toString(36).slice(2, 5), type: "fruits", title: "Frutas", items: [] });
-        }
-        return { ...m, sections: newSections };
-      }),
-    };
-  };
-  const [d, setD] = useState(upgradeDiet(init) || emptyDiet);
+  const [d, setD] = useState(init || emptyDiet);
   const [saved, setSaved] = useState(false);
   const [openMeal, setOpenMeal] = useState(null);
-  useEffect(() => { setD(upgradeDiet(init)||emptyDiet); setSaved(false); setOpenMeal(null); }, [client.id]);
+  useEffect(() => { setD(init||emptyDiet); setSaved(false); setOpenMeal(null); }, [client.id]);
 
   // Combined food DB: built-in + custom
   const ALL_FOODS = [...FOOD_DB, ...(customFoods || []).map(f => ({
@@ -5468,7 +5956,17 @@ const AEditDiet = ({ client, diet: init, db, setDb }) => {
   })();
 
   const save = async () => {
-    const dietWithTotals = { ...d, calories: +totals.kcal, protein: +totals.prot, carbs: +totals.carb, fat: +totals.fat };
+    // Strip empty veggies/fruits sections to keep stored diets clean.
+    // Other sections (protein/carbs/fat) are kept even if empty for backwards compat.
+    const cleanedMeals = (d.meals || []).map(m => ({
+      ...m,
+      sections: (m.sections || []).filter(s => {
+        if ((s.type === "veggies" || s.type === "fruits") && (!s.items || s.items.length === 0)) return false;
+        return true;
+      }),
+    }));
+    const dietToSave = { ...d, meals: cleanedMeals };
+    const dietWithTotals = { ...dietToSave, calories: +totals.kcal, protein: +totals.prot, carbs: +totals.carb, fat: +totals.fat };
     setDb(p=>({...p,diets:{...p.diets,[client.id]:dietWithTotals}}));
     setSaved(true); setTimeout(()=>setSaved(false),2000);
     await sb.upsert("client_data", { client_id: client.id, diet_json: dietWithTotals, updated_at: new Date().toISOString() });
@@ -7788,6 +8286,7 @@ export default function App() {
   const [loadError, setLoadError] = useState(false);
   const [customFoods, setCustomFoods] = useState([]);
   const [customExercises, setCustomExercises] = useState([]);
+  const [subscriptions, setSubscriptions] = useState([]);
 
   // Ensure viewport is set correctly for mobile (no pinch-zoom-out needed)
   useEffect(() => {
@@ -7829,22 +8328,28 @@ export default function App() {
     setSyncing(true);
     setLoadError(false);
     try {
-      const [clients, weights, notes, clientData, checkins] = await Promise.all([
+      const [clients, weights, notes, clientData, checkins, subscriptions] = await Promise.all([
         sb.select("clients", "?select=*&order=created_at"),
         sb.select("weight_entries", "?select=*&order=date"),
         sb.select("coach_notes", "?select=*&order=created_at.desc"),
         sb.select("client_data", "?select=*"),
         sb.select("checkins", "?select=*&order=week_number.desc"),
+        sb.select("client_subscriptions", "?select=*"),
       ]);
       setDb(prev => mergeSupabaseIntoDb(prev, { clients, weights, notes, clientData, checkins }));
+      setSubscriptions(subscriptions || []);
       await loadCustomFoods();
       await loadCustomExercises();
+      // Check renewal notifications (only run if currentUser is admin)
+      if (currentUser && (currentUser.role === "admin" || currentUser.role === "superadmin")) {
+        await checkRenewalNotifications(subscriptions || [], clients || []);
+      }
     } catch (e) {
       console.error("Supabase load error:", e);
       setLoadError(true);
     }
     setSyncing(false);
-  }, [loadCustomFoods, loadCustomExercises]);
+  }, [loadCustomFoods, loadCustomExercises, currentUser]);
 
   // Initial load on mount
   useEffect(() => {
@@ -7924,7 +8429,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises }}>
+      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises, subscriptions, setSubscriptions }}>
         <GlobalStyles/>
         {!currentUser
           ? <Login/>
