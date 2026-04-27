@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.6.1";
+const APP_VERSION = "5.7.1";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -802,6 +802,11 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [remember, setRemember] = useState(true);
   const [autoTried, setAutoTried] = useState(false);
+  const [showRequest, setShowRequest] = useState(false);
+  const [reqForm, setReqForm] = useState({ name: "", instagram: "", phone: "", message: "" });
+  const [reqSending, setReqSending] = useState(false);
+  const [reqSent, setReqSent] = useState(false);
+  const [reqErr, setReqErr] = useState("");
 
   // On mount: try to restore saved credentials and auto-login
   useEffect(() => {
@@ -897,6 +902,76 @@ const Login = () => {
             {loading ? "Verificando..." : "Entrar"}
           </Btn>
         </Card>
+
+        {/* Solicitar acceso */}
+        {!showRequest ? (
+          <button onClick={() => { setShowRequest(true); setReqSent(false); setReqErr(""); }}
+            style={{ width: "100%", marginTop: 14, background: "transparent", border: `1.5px dashed ${t.border}`, borderRadius: 14, padding: "14px", cursor: "pointer", color: t.textSub, fontFamily: "inherit", fontSize: 13, fontWeight: 700 }}>
+            📩 Solicitar acceso al team GluteFactoryy
+          </button>
+        ) : (
+          <Card style={{ marginTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: t.text }}>📩 Solicitar acceso</div>
+              <button onClick={() => setShowRequest(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: t.textSub, fontSize: 16, fontFamily: "inherit", padding: 0 }}>✕</button>
+            </div>
+
+            {reqSent ? (
+              <div style={{ textAlign: "center", padding: "16px 8px" }}>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: t.text, marginBottom: 6 }}>¡Solicitud enviada!</div>
+                <div style={{ fontSize: 12, color: t.textSub, lineHeight: 1.5 }}>
+                  Te contactaremos pronto para crear tu cuenta y darte acceso a la app.
+                </div>
+                <button onClick={() => { setShowRequest(false); setReqSent(false); setReqForm({ name: "", instagram: "", phone: "", message: "" }); }}
+                  style={{ marginTop: 14, background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 10, padding: "10px 18px", cursor: "pointer", color: t.text, fontSize: 12, fontWeight: 700, fontFamily: "inherit" }}>
+                  Cerrar
+                </button>
+              </div>
+            ) : (
+              <>
+                <Field label="NOMBRE Y APELLIDOS" value={reqForm.name} onChange={v => setReqForm(p => ({ ...p, name: v }))}/>
+                <Field label="INSTAGRAM (CON O SIN @)" value={reqForm.instagram} onChange={v => setReqForm(p => ({ ...p, instagram: v }))}/>
+                <Field label="TELÉFONO" value={reqForm.phone} onChange={v => setReqForm(p => ({ ...p, phone: v }))} type="tel"/>
+                <Field label="MENSAJE (OPCIONAL)" value={reqForm.message} onChange={v => setReqForm(p => ({ ...p, message: v }))} multiline rows={3} placeholder="¿Algo que quieras contarnos?"/>
+
+                {reqErr && (
+                  <div style={{ background: t.dangerAlpha, border: `1px solid rgba(224,90,90,0.2)`, borderRadius: 10, padding: "10px 12px", marginBottom: 12, color: t.danger, fontSize: 12, fontWeight: 600 }}>
+                    {reqErr}
+                  </div>
+                )}
+
+                <Btn onClick={async () => {
+                  if (!reqForm.name.trim()) { setReqErr("Pon tu nombre"); return; }
+                  if (!reqForm.instagram.trim() && !reqForm.phone.trim()) { setReqErr("Pon al menos Instagram o teléfono"); return; }
+                  setReqErr("");
+                  setReqSending(true);
+                  try {
+                    await sb.insert("access_requests", {
+                      name: reqForm.name.trim(),
+                      instagram: reqForm.instagram.trim().replace(/^@/, ""),
+                      phone: reqForm.phone.trim(),
+                      message: reqForm.message.trim() || null,
+                      status: "pending",
+                    });
+                    // Notify all admins
+                    await notifyAllAdmins(null, "request",
+                      "📩 Nueva solicitud de acceso",
+                      `${reqForm.name.trim()} ha solicitado acceso a la app.`,
+                      "request", null);
+                    setReqSent(true);
+                  } catch (e) {
+                    setReqErr("No se pudo enviar la solicitud. Inténtalo de nuevo.");
+                  }
+                  setReqSending(false);
+                }} disabled={reqSending} full>
+                  {reqSending ? "Enviando..." : "Enviar solicitud"}
+                </Btn>
+              </>
+            )}
+          </Card>
+        )}
 
         {/* Demo block removed — credentials managed by admin only */}
         <div style={{ textAlign: "center", marginTop: 20 }}>
@@ -3359,6 +3434,176 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
 };
 
 
+// ─── AdminRequests — manage access requests from prospective clients ─────────
+const AdminRequests = ({ onBack, onCreateClient }) => {
+  const { currentUser } = useApp();
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("pending");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const rows = await sb.select("access_requests", "?order=created_at.desc");
+      setRequests(rows || []);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const updateStatus = async (id, status) => {
+    try {
+      await sb.upsert("access_requests", {
+        id,
+        status,
+        reviewed_by: currentUser?.id || null,
+        reviewed_at: new Date().toISOString(),
+      });
+      await load();
+    } catch (e) {
+      alert("Error al actualizar la solicitud");
+    }
+  };
+
+  const deleteRequest = async (id, name) => {
+    if (!confirm(`¿Eliminar la solicitud de ${name} definitivamente?`)) return;
+    try {
+      await sb.remove("access_requests", "id", id);
+      await load();
+    } catch {}
+  };
+
+  const filtered = requests.filter(r => {
+    if (filter === "all") return true;
+    return r.status === filter;
+  });
+
+  const counts = {
+    pending:  requests.filter(r => r.status === "pending").length,
+    accepted: requests.filter(r => r.status === "accepted").length,
+    rejected: requests.filter(r => r.status === "rejected").length,
+  };
+
+  const fmtDate = ds => {
+    if (!ds) return "—";
+    const d = new Date(ds);
+    return `${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  };
+
+  const statusLabel = s => s === "pending" ? "⏳ Pendiente" : s === "accepted" ? "✅ Aceptada" : "❌ Rechazada";
+  const statusColor = s => s === "pending" ? "#f0a030" : s === "accepted" ? "#8ac942" : t.textDim;
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>📩 Solicitudes de acceso</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>Personas que han solicitado entrar a la app.</div>
+
+      {/* Filter tabs */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4, marginBottom: 16 }}>
+        <button onClick={() => setFilter("pending")}
+          style={{ background: filter === "pending" ? "rgba(240,160,48,0.15)" : t.bgCard, border: `1.5px solid ${filter === "pending" ? "rgba(240,160,48,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#f0a030" }}>{counts.pending}</div>
+          <div style={{ fontSize: 9, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Pendientes</div>
+        </button>
+        <button onClick={() => setFilter("accepted")}
+          style={{ background: filter === "accepted" ? "rgba(138,201,66,0.15)" : t.bgCard, border: `1.5px solid ${filter === "accepted" ? "rgba(138,201,66,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#8ac942" }}>{counts.accepted}</div>
+          <div style={{ fontSize: 9, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Aceptadas</div>
+        </button>
+        <button onClick={() => setFilter("rejected")}
+          style={{ background: filter === "rejected" ? "rgba(224,90,90,0.15)" : t.bgCard, border: `1.5px solid ${filter === "rejected" ? "rgba(224,90,90,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: "#e05a5a" }}>{counts.rejected}</div>
+          <div style={{ fontSize: 9, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Rechazadas</div>
+        </button>
+        <button onClick={() => setFilter("all")}
+          style={{ background: filter === "all" ? t.accentAlpha : t.bgCard, border: `1.5px solid ${filter === "all" ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", textAlign: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 900, color: t.text }}>{requests.length}</div>
+          <div style={{ fontSize: 9, color: t.textSub, fontWeight: 700, marginTop: 2 }}>Todas</div>
+        </button>
+      </div>
+
+      {loading && <div style={{ textAlign: "center", color: t.textSub, padding: 30 }}>Cargando...</div>}
+
+      {!loading && filtered.length === 0 && (
+        <Empty icon="check" text={filter === "pending" ? "No hay solicitudes pendientes" : "Ninguna solicitud en este filtro"}/>
+      )}
+
+      {!loading && filtered.map(r => (
+        <Card key={r.id} style={{ marginBottom: 10, borderLeft: `3px solid ${statusColor(r.status)}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: t.text, marginBottom: 4 }}>{r.name}</div>
+              <div style={{ fontSize: 11, color: t.textDim }}>{fmtDate(r.created_at)}</div>
+            </div>
+            <span style={{ fontSize: 10, fontWeight: 700, color: statusColor(r.status), background: `${statusColor(r.status)}22`, padding: "3px 8px", borderRadius: 5, whiteSpace: "nowrap" }}>
+              {statusLabel(r.status)}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: r.message ? 10 : 0 }}>
+            {r.instagram && (
+              <a href={`https://instagram.com/${r.instagram}`} target="_blank" rel="noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{ fontSize: 12, color: t.accent, textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
+                📸 @{r.instagram}
+              </a>
+            )}
+            {r.phone && (
+              <a href={`tel:${r.phone}`}
+                onClick={e => e.stopPropagation()}
+                style={{ fontSize: 12, color: t.accent, textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}>
+                📞 {r.phone}
+              </a>
+            )}
+          </div>
+
+          {r.message && (
+            <div style={{ background: t.bgElevated, borderRadius: 8, padding: "8px 10px", fontSize: 12, color: t.textSub, fontStyle: "italic", marginBottom: 10, lineHeight: 1.4 }}>
+              "{r.message}"
+            </div>
+          )}
+
+          {/* Actions */}
+          {r.status === "pending" ? (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 4 }}>
+              <button onClick={() => onCreateClient(r)}
+                style={{ background: t.accent, color: "white", border: "none", borderRadius: 8, padding: "8px", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                ✅ Crear cliente
+              </button>
+              <button onClick={() => updateStatus(r.id, "rejected")}
+                style={{ background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px", cursor: "pointer", color: t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                ❌ Rechazar
+              </button>
+              <button onClick={() => deleteRequest(r.id, r.name)}
+                style={{ background: t.dangerAlpha, border: "none", borderRadius: 8, padding: "8px", cursor: "pointer", color: t.danger, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                🗑️ Eliminar
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+              {r.status === "rejected" && (
+                <button onClick={() => updateStatus(r.id, "pending")}
+                  style={{ flex: 1, background: t.bgElevated, border: `1px solid ${t.border}`, borderRadius: 8, padding: "8px", cursor: "pointer", color: t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                  Volver a pendiente
+                </button>
+              )}
+              <button onClick={() => deleteRequest(r.id, r.name)}
+                style={{ flex: 1, background: t.dangerAlpha, border: "none", borderRadius: 8, padding: "8px", cursor: "pointer", color: t.danger, fontSize: 11, fontWeight: 700, fontFamily: "inherit" }}>
+                🗑️ Eliminar
+              </button>
+            </div>
+          )}
+        </Card>
+      ))}
+    </div>
+  );
+};
+
 // ─── AdminLibrary — hub for all reusable resources ────────────────────────────
 const AdminLibrary = ({ onBack, onRoutineTpls, onExercises, onBaseDiets, onFoods }) => {
   const tile = (icon, label, desc, onClick, color = t.accent) => (
@@ -4323,6 +4568,7 @@ const AdminApp = () => {
   const [q, setQ] = useState("");
   const [onboarded, setOnboarded] = useState(false);
   const [unreadNotifs, setUnreadNotifs] = useState(0);
+  const [prefilledRequest, setPrefilledRequest] = useState(null);
 
   // Load unread notification count
   useEffect(() => {
@@ -4382,6 +4628,7 @@ const AdminApp = () => {
     if (view === "routinetpls") return "📋 Plantillas de rutinas";
     if (view === "library") return "📚 Biblioteca";
     if (view === "payments") return "💰 Pagos";
+    if (view === "requests") return "📩 Solicitudes";
     if (view === "paysummary") return "📊 Resumen de pagos";
     if (view === "paysettings") return "💼 Configuración de pagos";
     return sel?.name;
@@ -4432,11 +4679,12 @@ const AdminApp = () => {
       </div>
 
       <div style={{ padding: "16px 16px 40px" }} className="fade-up">
-        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} onLibrary={()=>setView("library")} onErrors={()=>setView("errors")} onPayments={()=>setView("payments")}/>}
+        {view === "list"      && <AList clients={filtered} q={q} setQ={setQ} db={db} onSel={id=>{setSelId(id);setView("detail");}} onNew={()=>setView("new")} onDel={del} onLibrary={()=>setView("library")} onErrors={()=>setView("errors")} onPayments={()=>setView("payments")} onRequests={()=>setView("requests")}/>}
+        {view === "requests"  && <AdminRequests onBack={() => setView("list")} onCreateClient={(req) => { setPrefilledRequest(req); setView("new"); }}/>}
         {view === "payments"  && <AdminPayments onBack={() => setView("list")} db={db} onSelClient={(id) => { setSelId(id); setView("detail"); }} onSummary={() => setView("paysummary")}/>}
         {view === "paysummary" && <AdminPaymentSummary onBack={() => setView("payments")} db={db}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
-        {view === "new"       && <ANewClient db={db} setDb={setDb} onDone={()=>setView("list")}/>}
+        {view === "new"       && <ANewClient db={db} setDb={setDb} prefilled={prefilledRequest} onDone={()=>{ setPrefilledRequest(null); setView("list"); }}/>}
         {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} onPaymentSettings={() => setView("paysettings")} isSuperAdmin={isSuperAdmin}/>}
         {view === "paysettings" && isSuperAdmin && <AdminPaymentSettings onBack={() => setView("settings")}/>}
         {view === "library"   && <AdminLibrary onBack={() => setView("list")} onRoutineTpls={() => setView("routinetpls")} onExercises={() => setView("exercises")} onBaseDiets={() => setView("basediets")} onFoods={() => setView("foods")}/>}
@@ -4454,11 +4702,12 @@ const AdminApp = () => {
   );
 };
 
-const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors, onPayments }) => {
+const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors, onPayments, onRequests }) => {
   const { currentUser, subscriptions } = useApp();
   const [filter, setFilter] = useState("all");
   const [unreadCounts, setUnreadCounts] = useState({});
   const [errorCount, setErrorCount] = useState(0);
+  const [pendingRequests, setPendingRequests] = useState(0);
 
   // Load pending errors count
   useEffect(() => {
@@ -4466,6 +4715,10 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
       try {
         const rows = await sb.select("error_logs", "?resolved=eq.false&select=id");
         setErrorCount(rows?.length || 0);
+      } catch {}
+      try {
+        const rows = await sb.select("access_requests", "?status=eq.pending&select=id");
+        setPendingRequests(rows?.length || 0);
       } catch {}
     })();
   }, []);
@@ -4552,35 +4805,59 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
       ))}
     </div>
 
-    {/* Three main entry buttons: Library + Payments + Errors */}
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+    {/* 4 main entry buttons: 2x2 grid */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
       <button onClick={onLibrary}
-        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", fontFamily: "inherit" }}>
-        <div style={{ fontSize: 22 }}>📚</div>
-        <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Biblioteca</div>
-        <div style={{ fontSize: 9, color: t.textSub, textAlign: "center", lineHeight: 1.3 }}>Rutinas · Dietas<br/>Alimentos · Ejercicios</div>
+        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 11, padding: "10px 8px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <div style={{ fontSize: 20, flexShrink: 0 }}>📚</div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Biblioteca</div>
+          <div style={{ fontSize: 9, color: t.textSub, marginTop: 1 }}>Rutinas · Dietas</div>
+        </div>
       </button>
 
       <button onClick={onPayments}
-        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", fontFamily: "inherit" }}>
-        <div style={{ fontSize: 22 }}>💰</div>
-        <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Pagos</div>
-        <div style={{ fontSize: 9, color: t.textSub, textAlign: "center", lineHeight: 1.3 }}>Suscripciones<br/>y renovaciones</div>
+        style={{ background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 11, padding: "10px 8px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+        <div style={{ fontSize: 20, flexShrink: 0 }}>💰</div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Pagos</div>
+          <div style={{ fontSize: 9, color: t.textSub, marginTop: 1 }}>Suscripciones</div>
+        </div>
+      </button>
+
+      <button onClick={onRequests}
+        style={{ background: t.bgCard, border: `1.5px solid ${pendingRequests > 0 ? "rgba(240,160,48,0.35)" : t.border}`, borderRadius: 11, padding: "10px 8px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left", position: "relative" }}>
+        <div style={{ fontSize: 20, flexShrink: 0, position: "relative" }}>
+          📩
+          {pendingRequests > 0 && (
+            <div style={{ position: "absolute", top: -4, right: -8, background: "#f0a030", color: "white", borderRadius: 10, minWidth: 16, height: 16, fontSize: 9, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
+              {pendingRequests > 99 ? "99+" : pendingRequests}
+            </div>
+          )}
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Solicitudes</div>
+          <div style={{ fontSize: 9, color: pendingRequests > 0 ? "#f0a030" : t.textSub, marginTop: 1 }}>
+            {pendingRequests > 0 ? `${pendingRequests} pendiente${pendingRequests !== 1 ? "s" : ""}` : "Acceso a la app"}
+          </div>
+        </div>
       </button>
 
       <button onClick={onErrors}
-        style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 12, padding: "12px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "pointer", fontFamily: "inherit", position: "relative" }}>
-        <div style={{ fontSize: 22, position: "relative" }}>
+        style={{ background: t.bgCard, border: `1.5px solid ${errorCount > 0 ? "rgba(224,90,90,0.35)" : t.border}`, borderRadius: 11, padding: "10px 8px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left", position: "relative" }}>
+        <div style={{ fontSize: 20, flexShrink: 0, position: "relative" }}>
           🐛
           {errorCount > 0 && (
-            <div style={{ position: "absolute", top: -6, right: -10, background: t.danger, color: "white", borderRadius: 10, minWidth: 18, height: 18, fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
+            <div style={{ position: "absolute", top: -4, right: -8, background: t.danger, color: "white", borderRadius: 10, minWidth: 16, height: 16, fontSize: 9, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px", border: `2px solid ${t.bgCard}` }}>
               {errorCount > 99 ? "99+" : errorCount}
             </div>
           )}
         </div>
-        <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Errores</div>
-        <div style={{ fontSize: 9, color: errorCount > 0 ? t.danger : t.textSub, textAlign: "center", lineHeight: 1.3 }}>
-          {errorCount > 0 ? `${errorCount} sin resolver` : "Todo OK"}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: t.text }}>Errores</div>
+          <div style={{ fontSize: 9, color: errorCount > 0 ? t.danger : t.textSub, marginTop: 1 }}>
+            {errorCount > 0 ? `${errorCount} sin resolver` : "Todo OK"}
+          </div>
         </div>
       </button>
     </div>
@@ -4608,43 +4885,40 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
                               undefined;
 
       return (
-        <Card key={c.id} onClick={() => onSel(c.id)} style={cardBorderLeft ? { borderLeft: cardBorderLeft } : undefined}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <Card key={c.id} onClick={() => onSel(c.id)} style={{ padding: "10px 12px", marginBottom: 6, ...(cardBorderLeft ? { borderLeft: cardBorderLeft } : {}) }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ position: "relative" }}>
-              <Av initials={c.avatar} size={50}/>
-              <div style={{ position: "absolute", bottom: -2, right: -2, width: 16, height: 16, borderRadius: "50%", background: hasCheckin ? t.accent : t.bgElevated, border: `2px solid ${t.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8 }}>
+              <Av initials={c.avatar} size={38}/>
+              <div style={{ position: "absolute", bottom: -2, right: -2, width: 13, height: 13, borderRadius: "50%", background: hasCheckin ? t.accent : t.bgElevated, border: `2px solid ${t.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 7 }}>
                 {hasCheckin ? "✓" : ""}
               </div>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, maxWidth: "60%" }}>
-                  {subStatus.status === "overdue" && <span style={{ fontSize: 13 }}>⚠️</span>}
-                  <div style={{ fontSize: 16, fontWeight: 800, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flex: 1 }}>
+                  {subStatus.status === "overdue" && <span style={{ fontSize: 11, flexShrink: 0 }}>⚠️</span>}
+                  <div style={{ fontSize: 13, fontWeight: 800, color: t.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
                   {unread > 0 && (
-                    <div style={{ background: "#e05a5a", borderRadius: 20, minWidth: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 6px", fontSize: 11, fontWeight: 800, color: "white" }}>
+                    <div style={{ background: "#e05a5a", borderRadius: 20, minWidth: 17, height: 17, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 5px", fontSize: 10, fontWeight: 800, color: "white" }}>
                       {unread > 99 ? "99+" : unread}
                     </div>
                   )}
-                  <Pill color={hasCheckin ? "accent" : "default"}>
-                    {hasCheckin ? "✅ Check-in" : "⏳ Pendiente"}
-                  </Pill>
+                  <span style={{ fontSize: 14 }}>{hasCheckin ? "✅" : "⏳"}</span>
                 </div>
               </div>
-              <div style={{ fontSize: 13, color: t.textSub, marginTop: 3 }}>{c.email}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: t.textDim }}>
-                  {c.goal}{lastW ? ` · ${lastW.weight} kg` : ""}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: t.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60%" }}>
+                  {c.goal || c.email}{lastW ? ` · ${lastW.weight}kg` : ""}
                 </span>
                 {streak >= 2 && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#f0a030" }}>
-                    🔥 {streak} sem.
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#f0a030" }}>
+                    🔥 {streak}sem
                   </span>
                 )}
                 {(subStatus.status === "overdue" || subStatus.status === "warning") && (
-                  <span style={{ fontSize: 10, fontWeight: 700, color: subStatus.color, background: `${subStatus.color}22`, padding: "2px 6px", borderRadius: 5 }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: subStatus.color, background: `${subStatus.color}22`, padding: "1px 5px", borderRadius: 4 }}>
                     💰 {subStatus.label}
                   </span>
                 )}
@@ -6787,9 +7061,15 @@ const ANotesTab = ({ client, notes, db, setDb }) => {
   );
 };
 
-const ANewClient = ({ db, setDb, onDone }) => {
+const ANewClient = ({ db, setDb, onDone, prefilled }) => {
   const { currentUser } = useApp();
-  const [f, setF] = useState({name:"",email:"",password:"", captador_id: currentUser?.id || "", entrenador_id: currentUser?.id || ""});
+  const [f, setF] = useState({
+    name: prefilled?.name || "",
+    email: "",
+    password: "",
+    captador_id: currentUser?.id || "",
+    entrenador_id: currentUser?.id || "",
+  });
   const [copied, setCopied] = useState(false);
   const [admins, setAdmins] = useState([]);
   const fld = k => ({ value: f[k], onChange: v => setF(p=>({...p,[k]:v})) });
@@ -6839,11 +7119,34 @@ const ANewClient = ({ db, setDb, onDone }) => {
       captador_id: f.captador_id || null,
       entrenador_id: f.entrenador_id || null,
     });
+    // If created from an access request, mark it accepted
+    if (prefilled?.id) {
+      try {
+        await sb.upsert("access_requests", {
+          id: prefilled.id,
+          status: "accepted",
+          reviewed_by: currentUser?.id || null,
+          reviewed_at: new Date().toISOString(),
+          client_id: id,
+        });
+      } catch {}
+    }
     onDone();
   };
 
   return (
     <div>
+      {prefilled && (
+        <Card style={{ marginBottom: 12, background: t.accentAlpha, border: "1.5px solid rgba(30,155,191,0.3)" }}>
+          <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 6 }}>📩 DESDE SOLICITUD</div>
+          <div style={{ fontSize: 13, color: t.text, lineHeight: 1.5 }}>
+            <strong>{prefilled.name}</strong>
+            {prefilled.instagram && <> · 📸 @{prefilled.instagram}</>}
+            {prefilled.phone && <> · 📞 {prefilled.phone}</>}
+          </div>
+          <div style={{ fontSize: 11, color: t.textSub, marginTop: 4 }}>Al crear la cuenta, la solicitud se marcará como aceptada.</div>
+        </Card>
+      )}
       <Card>
         <Field label="NOMBRE COMPLETO *" {...fld("name")}/>
         <Field label="USUARIO *" {...fld("email")}/>
