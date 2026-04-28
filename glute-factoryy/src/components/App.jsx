@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.7.1";
+const APP_VERSION = "5.8";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -220,10 +220,45 @@ const validateAll = (checks) => {
   return null;
 };
 
-// Default prices per plan (in tokens)
-const PLAN_PRICES = { mensual: 50, trimestral: 135, semestral: 250, anual: 480 };
+// ─── PAYMENT CONFIG (editable via UI) ─────────────────────────────────────────
+// Default values that get overridden by payment_config table
+const DEFAULT_PAYMENT_CONFIG = {
+  app_pct: 5,
+  company_pct: 50,
+  pool_pct: 50,
+  first_captador_pct: 50,
+  first_entrenador_pct: 50,
+  renewal_entrenador_pct: 75,
+  renewal_captador_pct: 25,
+  price_mensual: 50,
+  price_trimestral: 135,
+  price_semestral: 250,
+  price_anual: 480,
+};
+
+// Mutable cache of current config (loaded once at app start, refreshed when admin saves)
+let CURRENT_PAYMENT_CONFIG = { ...DEFAULT_PAYMENT_CONFIG };
+
+const setPaymentConfig = (cfg) => {
+  CURRENT_PAYMENT_CONFIG = { ...DEFAULT_PAYMENT_CONFIG, ...(cfg || {}) };
+};
+
+const getPaymentConfig = () => CURRENT_PAYMENT_CONFIG;
+
+// Default prices per plan (in tokens) — read from config
+const PLAN_PRICES = new Proxy({}, {
+  get: (_, k) => {
+    const c = getPaymentConfig();
+    return { mensual: c.price_mensual, trimestral: c.price_trimestral, semestral: c.price_semestral, anual: c.price_anual }[k];
+  }
+});
 const PLAN_LABELS = { mensual: "Mensual", trimestral: "Trimestral", semestral: "Semestral", anual: "Anual" };
 const PLAN_MONTHS = { mensual: 1, trimestral: 3, semestral: 6, anual: 12 };
+
+// Service type labels
+const SERVICE_LABELS = { training: "💪 Solo entreno", nutrition: "🥗 Solo nutrición", full: "⭐ Completo" };
+const SERVICE_LABELS_SHORT = { training: "Solo entreno", nutrition: "Solo nutrición", full: "Completo" };
+const SERVICE_EMOJIS = { training: "💪", nutrition: "🥗", full: "⭐" };
 
 // Calculate next renewal date given a start date and plan
 const calcNextRenewal = (startDateStr, planType) => {
@@ -245,32 +280,53 @@ const getSubStatus = (sub, today = new Date()) => {
 };
 
 // Compute the breakdown of a payment into shares
-const computePaymentSplit = (amount, isFirstPayment, captadorId, entrenadorId) => {
+// Compute payment split. If `overridePcts` is provided, use those percentages instead
+// of the global config. This is used by the historical view to recompute past payments
+// using the % that were active when that payment was made.
+const computePaymentSplit = (amount, isFirstPayment, captadorId, entrenadorId, overridePcts = null) => {
   amount = parseFloat(amount) || 0;
-  const app = +(amount * 0.05).toFixed(2);
-  const afterApp = amount - app;
-  const company = +(afterApp * 0.5).toFixed(2);
-  const adminPool = +(afterApp - company).toFixed(2);
-  let captador = 0, entrenador = 0;
-  if (isFirstPayment) {
-    // First payment: 50/50
-    captador = +(adminPool * 0.5).toFixed(2);
-    entrenador = +(adminPool - captador).toFixed(2);
+  const cfg = overridePcts || getPaymentConfig();
+  const appPct      = (overridePcts?.app_pct ?? cfg.app_pct ?? 5) / 100;
+  const companyPct  = (overridePcts?.company_pct ?? cfg.company_pct ?? 50) / 100;
+  // Accept either explicit captador/entrenador % overrides or use global by isFirstPayment
+  let captadorPct, entrenadorPct;
+  if (overridePcts && overridePcts.captador_pct != null) {
+    captadorPct = (overridePcts.captador_pct ?? 0) / 100;
+    entrenadorPct = (overridePcts.entrenador_pct ?? 0) / 100;
+  } else if (isFirstPayment) {
+    captadorPct   = (cfg.first_captador_pct ?? 50) / 100;
+    entrenadorPct = (cfg.first_entrenador_pct ?? 50) / 100;
   } else {
-    // Renewal: entrenador 75%, captador 25%
-    entrenador = +(adminPool * 0.75).toFixed(2);
-    captador = +(adminPool - entrenador).toFixed(2);
+    captadorPct   = (cfg.renewal_captador_pct ?? 25) / 100;
+    entrenadorPct = (cfg.renewal_entrenador_pct ?? 75) / 100;
   }
-  // If no captador → goes to "pending"
-  // If no entrenador → goes to "pending"
-  // If captador === entrenador → they get both shares combined
+
+  const app = +(amount * appPct).toFixed(2);
+  const afterApp = amount - app;
+  const company = +(afterApp * companyPct).toFixed(2);
+  const adminPool = +(afterApp - company).toFixed(2);
+  // Captador and entrenador % are applied OVER the admin pool
+  const captador = +(adminPool * captadorPct).toFixed(2);
+  const entrenador = +(adminPool - captador).toFixed(2);
+
   const sharesByAdmin = {};
   const pending = { captador: 0, entrenador: 0 };
   if (captadorId) sharesByAdmin[captadorId] = (sharesByAdmin[captadorId] || 0) + captador;
   else pending.captador = captador;
   if (entrenadorId) sharesByAdmin[entrenadorId] = (sharesByAdmin[entrenadorId] || 0) + entrenador;
   else pending.entrenador = entrenador;
-  return { app, company, adminPool, captador, entrenador, sharesByAdmin, pending };
+
+  // Return the percentages used so they can be persisted with the payment for audit
+  return {
+    app, company, adminPool, captador, entrenador,
+    sharesByAdmin, pending,
+    pctsUsed: {
+      app_pct: appPct * 100,
+      company_pct: companyPct * 100,
+      captador_pct: captadorPct * 100,
+      entrenador_pct: entrenadorPct * 100,
+    },
+  };
 };
 
 // Check renewals and send notifications (warning_3days + expired) — runs once per app load.
@@ -362,6 +418,7 @@ const mergeSupabaseIntoDb = (prev, { clients, weights, notes, clientData, checki
       passwordChanged: c.password_changed || false,
       captador_id: c.captador_id || "",
       entrenador_id: c.entrenador_id || "",
+      service_type: c.service_type || "full",
     }));
     const ids = new Set(sbClients.map(c => c.id));
     next.clients = [...prev.clients.filter(c => !ids.has(c.id)), ...sbClients];
@@ -1203,15 +1260,16 @@ const ClientApp = () => {
     </div>
   );
 
-  const navItems = [
+  const allNavItems = [
     { id: "home",     icon: "home",      label: "Inicio"  },
-    { id: "routine",  icon: "dumbbell",  label: "Rutina"  },
-    { id: "diet",     icon: "food",      label: "Dieta"   },
+    { id: "routine",  icon: "dumbbell",  label: "Rutina",  hideForService: "nutrition" },
+    { id: "diet",     icon: "food",      label: "Dieta",   hideForService: "training" },
     { id: "weight",   icon: "scale",     label: "Peso"    },
     { id: "notes",    icon: "notes",     label: "Notas"   },
     { id: "tracking", icon: "lightning", label: "Check-in"},
     { id: "chat",     icon: "chat",      label: "Chat"    },
   ];
+  const navItems = allNavItems.filter(it => it.hideForService !== client.service_type);
 
   return (
     <div style={{ minHeight: "100vh", background: t.bg, maxWidth: 430, margin: "0 auto", display: "flex", flexDirection: "column" }}>
@@ -1756,7 +1814,7 @@ const CNotes = ({ client, notes }) => (
 );
 
 // ─── AdminSettings — change password/username ─────────────────────────────────
-const AdminSettings = ({ onBack, onChangelog, onAdmins, onPaymentSettings, isSuperAdmin }) => {
+const AdminSettings = ({ onBack, onChangelog, onAdmins, onPaymentSettings, onPaymentConfig, isSuperAdmin }) => {
   const { currentUser, db, setDb, setCurrentUser, logout } = useApp();
   const [name, setName] = useState(currentUser.name);
   const [email, setEmail] = useState(currentUser.email);
@@ -1817,6 +1875,17 @@ const AdminSettings = ({ onBack, onChangelog, onAdmins, onPaymentSettings, isSup
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Configuración de pagos</div>
                 <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Destinatarios y formas de pago</div>
+              </div>
+              <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
+            </button>
+          )}
+          {onPaymentConfig && (
+            <button onClick={onPaymentConfig}
+              style={{ marginBottom: 8, width: "100%", background: t.bgCard, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+              <div style={{ width: 40, height: 40, borderRadius: 11, background: t.accentAlpha, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📊</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Configuración de reparto</div>
+                <div style={{ fontSize: 11, color: t.textSub, marginTop: 2 }}>Porcentajes y precios por defecto</div>
               </div>
               <Icon n="back" s={16} style={{ transform: "rotate(180deg)", color: t.textDim }}/>
             </button>
@@ -2978,6 +3047,213 @@ const AdminPayments = ({ onBack, db, onSelClient, onSummary }) => {
   );
 };
 
+// ─── AdminPaymentConfig — edit split percentages and default prices ───────────
+const AdminPaymentConfig = ({ onBack }) => {
+  const { currentUser } = useApp();
+  const [cfg, setCfg] = useState(getPaymentConfig());
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  // Reload from DB on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sb.select("payment_config", "?id=eq.default");
+        if (rows && rows.length > 0) setCfg(rows[0]);
+      } catch {}
+    })();
+  }, []);
+
+  const num = (v, def) => {
+    const n = parseFloat(v);
+    return isNaN(n) ? def : n;
+  };
+
+  const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
+
+  // Validation: percentages must add up correctly
+  const companyPct = num(cfg.company_pct, 50);
+  const poolPct = num(cfg.pool_pct, 50);
+  const stage2Total = companyPct + poolPct;
+  const firstCapPct = num(cfg.first_captador_pct, 50);
+  const firstEntPct = num(cfg.first_entrenador_pct, 50);
+  const firstStageTotal = firstCapPct + firstEntPct;
+  const renewCapPct = num(cfg.renewal_captador_pct, 25);
+  const renewEntPct = num(cfg.renewal_entrenador_pct, 75);
+  const renewStageTotal = renewCapPct + renewEntPct;
+
+  const canSave = stage2Total === 100 && firstStageTotal === 100 && renewStageTotal === 100;
+
+  const save = async () => {
+    if (!canSave) {
+      alert("Los porcentajes deben sumar 100%. Revisa los valores marcados en rojo.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await sb.upsert("payment_config", {
+        id: "default",
+        app_pct: num(cfg.app_pct, 5),
+        company_pct: companyPct,
+        pool_pct: poolPct,
+        first_captador_pct: firstCapPct,
+        first_entrenador_pct: firstEntPct,
+        renewal_entrenador_pct: renewEntPct,
+        renewal_captador_pct: renewCapPct,
+        price_mensual: num(cfg.price_mensual, 50),
+        price_trimestral: num(cfg.price_trimestral, 135),
+        price_semestral: num(cfg.price_semestral, 250),
+        price_anual: num(cfg.price_anual, 480),
+        updated_by: currentUser?.id,
+        updated_at: new Date().toISOString(),
+      });
+      setPaymentConfig({ ...cfg, app_pct: num(cfg.app_pct, 5), company_pct: companyPct, pool_pct: poolPct, first_captador_pct: firstCapPct, first_entrenador_pct: firstEntPct, renewal_entrenador_pct: renewEntPct, renewal_captador_pct: renewCapPct, price_mensual: num(cfg.price_mensual, 50), price_trimestral: num(cfg.price_trimestral, 135), price_semestral: num(cfg.price_semestral, 250), price_anual: num(cfg.price_anual, 480) });
+      setSaved(true); setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      alert("Error al guardar: " + (e?.message || ""));
+    }
+    setSaving(false);
+  };
+
+  // Live simulation with 100 tk
+  const sim = (isFirst) => {
+    const overridePcts = {
+      app_pct: num(cfg.app_pct, 5),
+      company_pct: companyPct,
+      captador_pct: isFirst ? firstCapPct : renewCapPct,
+      entrenador_pct: isFirst ? firstEntPct : renewEntPct,
+    };
+    return computePaymentSplit(100, isFirst, "captador-fake", "entrenador-fake", overridePcts);
+  };
+
+  const numField = (key, def, suffix = "%", small = false) => (
+    <input
+      type="number"
+      value={cfg[key] ?? def}
+      onChange={e => set(key, e.target.value)}
+      style={{
+        width: small ? 60 : 80,
+        background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 8,
+        padding: "8px 10px", color: t.text, fontSize: 14, fontFamily: "inherit",
+        outline: "none", textAlign: "right",
+      }}
+    />
+  );
+
+  const row = (label, key, def) => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${t.border}` }}>
+      <span style={{ fontSize: 13, color: t.textSub, flex: 1 }}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {numField(key, def)}
+        <span style={{ fontSize: 12, color: t.textDim, fontWeight: 700 }}>%</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:t.textSub, fontFamily:"inherit", fontSize:13, fontWeight:600, marginBottom:20, padding:0 }}>
+        <Icon n="back" s={16}/> Volver
+      </button>
+
+      <div style={{ fontSize: 22, fontWeight: 900, color: t.text, marginBottom: 4 }}>💼 Configuración de reparto</div>
+      <div style={{ fontSize: 13, color: t.textSub, marginBottom: 22 }}>Ajusta porcentajes y precios. Los pagos antiguos mantienen los valores que tenían cuando se registraron.</div>
+
+      {/* PASO 1 */}
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10 }}>PASO 1 — DEL TOTAL COBRADO</div>
+        {row("📱 Desarrollo de la app", "app_pct", 5)}
+      </Card>
+
+      {/* PASO 2 */}
+      <Card style={{ marginBottom: 14, borderColor: stage2Total !== 100 ? "rgba(224,90,90,0.4)" : t.border }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10 }}>PASO 2 — DEL RESTANTE TRAS APP</div>
+        {row("🏋️ Glute Factoryy (empresa)", "company_pct", 50)}
+        {row("👥 Pool admins", "pool_pct", 50)}
+        <div style={{ marginTop: 8, fontSize: 11, color: stage2Total === 100 ? "#5fb98e" : "#e05a5a", fontWeight: 700 }}>
+          {stage2Total === 100 ? `✓ Suma 100%` : `⚠️ Suma ${stage2Total}% — debe ser 100%`}
+        </div>
+      </Card>
+
+      {/* PRIMER PAGO */}
+      <Card style={{ marginBottom: 14, borderColor: firstStageTotal !== 100 ? "rgba(224,90,90,0.4)" : t.border }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10 }}>🆕 PRIMER PAGO — REPARTO DEL POOL</div>
+        {row("👋 Captador", "first_captador_pct", 50)}
+        {row("👨‍🏫 Entrenador", "first_entrenador_pct", 50)}
+        <div style={{ marginTop: 8, fontSize: 11, color: firstStageTotal === 100 ? "#5fb98e" : "#e05a5a", fontWeight: 700 }}>
+          {firstStageTotal === 100 ? `✓ Suma 100%` : `⚠️ Suma ${firstStageTotal}% — debe ser 100%`}
+        </div>
+      </Card>
+
+      {/* RENOVACIÓN */}
+      <Card style={{ marginBottom: 14, borderColor: renewStageTotal !== 100 ? "rgba(224,90,90,0.4)" : t.border }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10 }}>🔄 RENOVACIÓN — REPARTO DEL POOL</div>
+        {row("👨‍🏫 Entrenador", "renewal_entrenador_pct", 75)}
+        {row("👋 Captador", "renewal_captador_pct", 25)}
+        <div style={{ marginTop: 8, fontSize: 11, color: renewStageTotal === 100 ? "#5fb98e" : "#e05a5a", fontWeight: 700 }}>
+          {renewStageTotal === 100 ? `✓ Suma 100%` : `⚠️ Suma ${renewStageTotal}% — debe ser 100%`}
+        </div>
+      </Card>
+
+      {/* PRECIOS */}
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 10 }}>💰 PRECIOS POR DEFECTO (TOKENS)</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${t.border}` }}>
+          <span style={{ fontSize: 13, color: t.textSub }}>Mensual</span>
+          {numField("price_mensual", 50, "tk")}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${t.border}` }}>
+          <span style={{ fontSize: 13, color: t.textSub }}>Trimestral</span>
+          {numField("price_trimestral", 135, "tk")}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${t.border}` }}>
+          <span style={{ fontSize: 13, color: t.textSub }}>Semestral</span>
+          {numField("price_semestral", 250, "tk")}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
+          <span style={{ fontSize: 13, color: t.textSub }}>Anual</span>
+          {numField("price_anual", 480, "tk")}
+        </div>
+      </Card>
+
+      {/* SIMULACIÓN */}
+      <Card accent style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 12 }}>🧮 SIMULACIÓN (PAGO DE 100 TK)</div>
+        {(() => {
+          const f = sim(true);
+          const r = sim(false);
+          return (
+            <>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 6 }}>🆕 Primer pago</div>
+                <div style={{ fontSize: 11, color: t.textSub, lineHeight: 1.7 }}>
+                  App: <strong style={{ color: t.text }}>{f.app}</strong> · Empresa: <strong style={{ color: t.text }}>{f.company}</strong><br/>
+                  Captador: <strong style={{ color: t.text }}>{f.captador}</strong> · Entrenador: <strong style={{ color: t.text }}>{f.entrenador}</strong>
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: t.text, marginBottom: 6 }}>🔄 Renovación</div>
+                <div style={{ fontSize: 11, color: t.textSub, lineHeight: 1.7 }}>
+                  App: <strong style={{ color: t.text }}>{r.app}</strong> · Empresa: <strong style={{ color: t.text }}>{r.company}</strong><br/>
+                  Entrenador: <strong style={{ color: t.text }}>{r.entrenador}</strong> · Captador: <strong style={{ color: t.text }}>{r.captador}</strong>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+      </Card>
+
+      <Btn onClick={save} disabled={!canSave || saving} full>
+        {saving ? "Guardando..." : saved ? "✓ Configuración guardada" : "💾 Guardar configuración"}
+      </Btn>
+
+      <div style={{ marginTop: 16, padding: "12px 14px", background: t.bgElevated, borderRadius: 10, fontSize: 11, color: t.textDim, lineHeight: 1.6 }}>
+        💡 Los pagos ya registrados conservan los porcentajes que tenían en su momento. Esta configuración solo afecta a pagos nuevos.
+      </div>
+    </div>
+  );
+};
+
 // ─── AdminPaymentSettings — manage recipients and methods ────────────────────
 const AdminPaymentSettings = ({ onBack }) => {
   const [items, setItems] = useState([]);
@@ -3201,7 +3477,10 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
       const periodStart = isFirst ? form.start_date : (existingSub?.next_renewal_date || form.start_date);
       const periodEnd = calcNextRenewal(periodStart, form.plan_type);
 
-      // Insert payment history
+      // Compute split with current global config to get percentages
+      const split = computePaymentSplit(parseFloat(form.price) || 0, isFirst, client.captador_id, client.entrenador_id);
+
+      // Insert payment history with split percentages persisted (immutable history)
       await sb.insert("payment_history", {
         client_id: client.id,
         plan_type: form.plan_type,
@@ -3214,6 +3493,10 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
         entrenador_id: client.entrenador_id || null,
         paid_to: form.paid_to || null,
         payment_method: form.payment_method || null,
+        split_app_pct: split.pctsUsed.app_pct,
+        split_company_pct: split.pctsUsed.company_pct,
+        split_captador_pct: split.pctsUsed.captador_pct,
+        split_entrenador_pct: split.pctsUsed.entrenador_pct,
         created_by: currentUser?.id || null,
       });
 
@@ -4631,6 +4914,7 @@ const AdminApp = () => {
     if (view === "requests") return "📩 Solicitudes";
     if (view === "paysummary") return "📊 Resumen de pagos";
     if (view === "paysettings") return "💼 Configuración de pagos";
+    if (view === "payconfig") return "💼 Configuración de reparto";
     return sel?.name;
   };
 
@@ -4685,8 +4969,9 @@ const AdminApp = () => {
         {view === "paysummary" && <AdminPaymentSummary onBack={() => setView("payments")} db={db}/>}
         {view === "detail"    && sel && <ADetail client={sel} db={db} setDb={setDb} onDel={()=>del(sel.id)}/>}
         {view === "new"       && <ANewClient db={db} setDb={setDb} prefilled={prefilledRequest} onDone={()=>{ setPrefilledRequest(null); setView("list"); }}/>}
-        {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} onPaymentSettings={() => setView("paysettings")} isSuperAdmin={isSuperAdmin}/>}
+        {view === "settings"  && <AdminSettings onBack={() => setView("list")} onChangelog={() => setView("changelog")} onAdmins={() => setView("admins")} onPaymentSettings={() => setView("paysettings")} onPaymentConfig={() => setView("payconfig")} isSuperAdmin={isSuperAdmin}/>}
         {view === "paysettings" && isSuperAdmin && <AdminPaymentSettings onBack={() => setView("settings")}/>}
+        {view === "payconfig" && isSuperAdmin && <AdminPaymentConfig onBack={() => setView("settings")}/>}
         {view === "library"   && <AdminLibrary onBack={() => setView("list")} onRoutineTpls={() => setView("routinetpls")} onExercises={() => setView("exercises")} onBaseDiets={() => setView("basediets")} onFoods={() => setView("foods")}/>}
         {view === "admins"    && isSuperAdmin && <AdminManagement onBack={() => setView("settings")}/>}
         {view === "chat"      && <AdminChat/>}
@@ -4934,9 +5219,24 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
 
 const ADetail = ({ client, db, setDb, onDel }) => {
   const [tab, setTab] = useState("profile");
-  const tabs = ["Perfil","Rutina","Dieta","Peso","Notas","Seguimiento","Chat 💬","📋 Cuestionario"];
-  const ids  = ["profile","routine","diet","weight","notes","tracking","chat","questionnaire"];
+  const baseTabs = [
+    { id: "profile", label: "Perfil" },
+    { id: "routine", label: "Rutina", hideForService: "nutrition" },
+    { id: "diet",    label: "Dieta",  hideForService: "training" },
+    { id: "weight",  label: "Peso" },
+    { id: "notes",   label: "Notas" },
+    { id: "tracking", label: "Seguimiento" },
+    { id: "chat",    label: "Chat 💬" },
+    { id: "questionnaire", label: "📋 Cuestionario" },
+  ];
+  const visibleTabs = baseTabs.filter(t2 => t2.hideForService !== client.service_type);
   useEffect(() => { setTab("profile"); }, [client.id]);
+
+  // Helper to display admin name
+  const adminName = (id) => {
+    const u = (db.users || []).find(u => u.id === id);
+    return u?.name || "—";
+  };
 
   return (
     <div>
@@ -4953,20 +5253,35 @@ const ADetail = ({ client, db, setDb, onDel }) => {
             <Icon n="trash" s={15}/>
           </button>
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           <Pill color="accent">Activo</Pill>
           <Pill>{client.age} años</Pill>
           <Pill>{client.height} cm</Pill>
           {(db.weightHistory[client.id]||[]).slice(-1)[0] && <Pill>{(db.weightHistory[client.id]||[]).slice(-1)[0].weight} kg</Pill>}
         </div>
+        {/* Service & assignments */}
+        <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 10, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: t.textDim, fontWeight: 700, fontSize: 10, letterSpacing: "0.05em" }}>SERVICIO</span>
+            <span style={{ color: t.text, fontWeight: 700 }}>{SERVICE_LABELS[client.service_type || "full"]}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: t.textDim, fontWeight: 700, fontSize: 10, letterSpacing: "0.05em" }}>👋 CAPT.</span>
+            <span style={{ color: t.text, fontWeight: 700 }}>{adminName(client.captador_id)}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: t.textDim, fontWeight: 700, fontSize: 10, letterSpacing: "0.05em" }}>👨‍🏫 ENTR.</span>
+            <span style={{ color: t.text, fontWeight: 700 }}>{adminName(client.entrenador_id)}</span>
+          </div>
+        </div>
       </Card>
 
       {/* Tab scroll */}
       <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 16, scrollbarWidth: "none", msOverflowStyle: "none" }}>
-        {tabs.map((label,i) => (
-          <button key={ids[i]} onClick={()=>setTab(ids[i])}
-            style={{ background: tab===ids[i]?t.accentAlpha:t.bgCard, border: `1.5px solid ${tab===ids[i]?"rgba(30,155,191,0.3)":t.border}`, borderRadius: 10, padding: "9px 16px", color: tab===ids[i]?t.accent:t.textSub, fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0 }}>
-            {label}
+        {visibleTabs.map(t2 => (
+          <button key={t2.id} onClick={()=>setTab(t2.id)}
+            style={{ background: tab===t2.id?t.accentAlpha:t.bgCard, border: `1.5px solid ${tab===t2.id?"rgba(30,155,191,0.3)":t.border}`, borderRadius: 10, padding: "9px 16px", color: tab===t2.id?t.accent:t.textSub, fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit", transition: "all 0.15s", flexShrink: 0 }}>
+            {t2.label}
           </button>
         ))}
       </div>
@@ -5166,6 +5481,7 @@ const AEditProfile = ({ client, db, setDb }) => {
       start_date: f.startDate, avatar: f.avatar,
       captador_id: f.captador_id || null,
       entrenador_id: f.entrenador_id || null,
+      service_type: f.service_type || "full",
     });
   };
 
@@ -5268,9 +5584,22 @@ const AEditProfile = ({ client, db, setDb }) => {
       <Field label="NOTAS PERSONALES" {...fld("personalNotes")} multiline rows={3}/>
       <Field label="LESIONES / LIMITACIONES" {...fld("injuries")} multiline rows={3}/>
 
-      {/* Asignación admins */}
+      {/* Servicio + asignación admins */}
       <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14, marginTop: 8, marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 ASIGNACIÓN PARA REPARTO DE PAGOS</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 SERVICIO Y ASIGNACIONES</div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>MODALIDAD</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+            {[["training", "💪", "Solo entreno"], ["nutrition", "🥗", "Solo nutrición"], ["full", "⭐", "Completo"]].map(([val, em, lbl]) => (
+              <button key={val} onClick={() => setF(p => ({ ...p, service_type: val }))}
+                style={{ background: f.service_type === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${f.service_type === val ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", color: f.service_type === val ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                <span style={{ fontSize: 18 }}>{em}</span>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div style={{ marginBottom: 12 }}>
           <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👋 CAPTADOR</div>
@@ -7069,6 +7398,7 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
     password: "",
     captador_id: currentUser?.id || "",
     entrenador_id: currentUser?.id || "",
+    service_type: "full",
   });
   const [copied, setCopied] = useState(false);
   const [admins, setAdmins] = useState([]);
@@ -7107,7 +7437,7 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
     const avatar = f.name.split(" ").map(n=>n[0]).join("").slice(0,2).toUpperCase();
     setDb(p=>({
       ...p,
-      clients:[...p.clients,{id,userId:uid,avatar,status:"active",startDate,name:f.name,email:f.email,password:f.password,phone:"",age:0,height:0,goal:"",personalNotes:"",injuries:"",captador_id:f.captador_id,entrenador_id:f.entrenador_id}],
+      clients:[...p.clients,{id,userId:uid,avatar,status:"active",startDate,name:f.name,email:f.email,password:f.password,phone:"",age:0,height:0,goal:"",personalNotes:"",injuries:"",captador_id:f.captador_id,entrenador_id:f.entrenador_id,service_type:f.service_type}],
       users:[...p.users,{id:uid,email:f.email,password:f.password,role:"client",name:f.name,clientId:id}],
       weightHistory:{ ...p.weightHistory, [id]: [] },
       coachNotes:{ ...p.coachNotes, [id]: [] },
@@ -7118,6 +7448,7 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
       status: "active", start_date: startDate, avatar,
       captador_id: f.captador_id || null,
       entrenador_id: f.entrenador_id || null,
+      service_type: f.service_type || "full",
     });
     // If created from an access request, mark it accepted
     if (prefilled?.id) {
@@ -7179,9 +7510,22 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
           El cliente completará el resto de su perfil cuando inicie sesión por primera vez.
         </div>
 
-        {/* Asignación de admins */}
+        {/* Servicio + asignación de admins */}
         <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14, marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 ASIGNACIÓN PARA REPARTO DE PAGOS</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 SERVICIO Y ASIGNACIONES</div>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>MODALIDAD</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+              {[["training", "💪", "Solo entreno"], ["nutrition", "🥗", "Solo nutrición"], ["full", "⭐", "Completo"]].map(([val, em, lbl]) => (
+                <button key={val} onClick={() => setF(p => ({ ...p, service_type: val }))}
+                  style={{ background: f.service_type === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${f.service_type === val ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", color: f.service_type === val ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                  <span style={{ fontSize: 18 }}>{em}</span>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div style={{ marginBottom: 12 }}>
             <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👋 CAPTADOR (quien da de alta)</div>
@@ -8631,16 +8975,21 @@ export default function App() {
     setSyncing(true);
     setLoadError(false);
     try {
-      const [clients, weights, notes, clientData, checkins, subscriptions] = await Promise.all([
+      const [clients, weights, notes, clientData, checkins, subscriptions, paymentCfg] = await Promise.all([
         sb.select("clients", "?select=*&order=created_at"),
         sb.select("weight_entries", "?select=*&order=date"),
         sb.select("coach_notes", "?select=*&order=created_at.desc"),
         sb.select("client_data", "?select=*"),
         sb.select("checkins", "?select=*&order=week_number.desc"),
         sb.select("client_subscriptions", "?select=*"),
+        sb.select("payment_config", "?id=eq.default"),
       ]);
       setDb(prev => mergeSupabaseIntoDb(prev, { clients, weights, notes, clientData, checkins }));
       setSubscriptions(subscriptions || []);
+      // Load payment config into mutable cache
+      if (paymentCfg && paymentCfg.length > 0) {
+        setPaymentConfig(paymentCfg[0]);
+      }
       await loadCustomFoods();
       await loadCustomExercises();
       // Check renewal notifications (only run if currentUser is admin)
