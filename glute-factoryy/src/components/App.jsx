@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.9";
+const APP_VERSION = "6.0";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -3052,7 +3052,7 @@ const AdminPayments = ({ onBack, db, onSelClient, onSummary }) => {
 
 // ─── AdminPaymentConfig — edit split percentages and default prices ───────────
 const AdminPaymentConfig = ({ onBack }) => {
-  const { currentUser } = useApp();
+  const { currentUser, refreshPaymentCfg } = useApp();
   const [cfg, setCfg] = useState(getPaymentConfig());
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -3109,8 +3109,8 @@ const AdminPaymentConfig = ({ onBack }) => {
         price_anual: num(cfg.price_anual, 480),
         updated_by: currentUser?.id,
         updated_at: new Date().toISOString(),
-      });
-      setPaymentConfig({ ...cfg, app_pct: num(cfg.app_pct, 5), company_pct: companyPct, pool_pct: poolPct, first_captador_pct: firstCapPct, first_entrenador_pct: firstEntPct, renewal_entrenador_pct: renewEntPct, renewal_captador_pct: renewCapPct, price_mensual: num(cfg.price_mensual, 50), price_trimestral: num(cfg.price_trimestral, 135), price_semestral: num(cfg.price_semestral, 250), price_anual: num(cfg.price_anual, 480) });
+      }, "id");
+      refreshPaymentCfg({ ...cfg, app_pct: num(cfg.app_pct, 5), company_pct: companyPct, pool_pct: poolPct, first_captador_pct: firstCapPct, first_entrenador_pct: firstEntPct, renewal_entrenador_pct: renewEntPct, renewal_captador_pct: renewCapPct, price_mensual: num(cfg.price_mensual, 50), price_trimestral: num(cfg.price_trimestral, 135), price_semestral: num(cfg.price_semestral, 250), price_anual: num(cfg.price_anual, 480) });
       setSaved(true); setTimeout(() => setSaved(false), 2500);
     } catch (e) {
       alert("Error al guardar: " + (e?.message || ""));
@@ -3407,7 +3407,10 @@ const AdminPaymentSettings = ({ onBack }) => {
 
 // ─── PaymentEditor — assign / manage a client subscription ───────────────────
 const PaymentEditor = ({ client, existingSub, onClose, currentUser, onClientUpdated }) => {
-  const { admins, loadAdmins, setDb } = useApp();
+  const { admins, loadAdmins, setDb, paymentCfgVersion } = useApp();
+  // Reading paymentCfgVersion (even if unused) forces a re-render when payment
+  // config changes elsewhere — so the split preview reflects new percentages.
+  void paymentCfgVersion;
   const today = new Date().toISOString().slice(0, 10);
   // Local state for editable assignments — persisted on change
   const [assign, setAssign] = useState({
@@ -8971,6 +8974,13 @@ export default function App() {
   const [customExercises, setCustomExercises] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
   const [admins, setAdmins] = useState([]);
+  // Bumped each time payment config is saved so dependent components re-render.
+  // computePaymentSplit reads from the module-level cache (CURRENT_PAYMENT_CONFIG).
+  const [paymentCfgVersion, setPaymentCfgVersion] = useState(0);
+  const refreshPaymentCfg = useCallback((newCfg) => {
+    setPaymentConfig(newCfg);
+    setPaymentCfgVersion(v => v + 1);
+  }, []);
 
   // Ensure viewport is set correctly for mobile (no pinch-zoom-out needed)
   useEffect(() => {
@@ -9032,7 +9042,7 @@ export default function App() {
       setSubscriptions(subscriptions || []);
       // Load payment config into mutable cache
       if (paymentCfg && paymentCfg.length > 0) {
-        setPaymentConfig(paymentCfg[0]);
+        refreshPaymentCfg(paymentCfg[0]);
       }
       await loadCustomFoods();
       await loadCustomExercises();
@@ -9046,7 +9056,7 @@ export default function App() {
       setLoadError(true);
     }
     setSyncing(false);
-  }, [loadCustomFoods, loadCustomExercises, loadAdmins, currentUser]);
+  }, [loadCustomFoods, loadCustomExercises, loadAdmins, refreshPaymentCfg, currentUser]);
 
   // Initial load on mount
   useEffect(() => {
@@ -9126,7 +9136,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises, subscriptions, setSubscriptions, admins, loadAdmins }}>
+      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises, subscriptions, setSubscriptions, admins, loadAdmins, paymentCfgVersion, refreshPaymentCfg }}>
         <GlobalStyles/>
         {!currentUser
           ? <Login/>
