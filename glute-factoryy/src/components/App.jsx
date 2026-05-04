@@ -1,6 +1,6 @@
 import React, { useState, useCallback, createContext, useContext, useRef, useEffect, useMemo } from "react";
 
-const APP_VERSION = "5.8";
+const APP_VERSION = "5.9";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── SUPABASE CONFIG (v2.0) ───────────────────────────────────────────────────
@@ -2473,6 +2473,7 @@ const AdminErrors = ({ onBack }) => {
 
 // ─── AdminPaymentSummary — monthly summary with admin breakdown ───────────────
 const AdminPaymentSummary = ({ onBack, db }) => {
+  const { admins } = useApp();
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth()); // 0-11
@@ -2526,9 +2527,12 @@ const AdminPaymentSummary = ({ onBack, db }) => {
 
   useEffect(() => { load(); }, [year, month, annualMode]);
 
-  // Build admin name lookup
+  // Build admin name lookup — uses admins from context first, db.users as fallback
   const adminMap = {};
-  (db.users || []).forEach(u => { if (u.role === "admin" || u.role === "superadmin") adminMap[u.id] = u.name; });
+  (admins || []).forEach(a => { adminMap[a.id] = a.name; });
+  (db.users || []).forEach(u => {
+    if ((u.role === "admin" || u.role === "superadmin") && !adminMap[u.id]) adminMap[u.id] = u.name;
+  });
   const clientMap = {};
   (db.clients || []).forEach(c => { clientMap[c.id] = c.name; });
 
@@ -2952,7 +2956,6 @@ const AdminPayments = ({ onBack, db, onSelClient, onSummary }) => {
         existingSub={editing.sub}
         onClose={() => { setEditing(null); load(); }}
         currentUser={currentUser}
-        admins={(db.users || []).filter(u => u.role === "admin" || u.role === "superadmin")}
       />
     );
   }
@@ -3403,8 +3406,18 @@ const AdminPaymentSettings = ({ onBack }) => {
 };
 
 // ─── PaymentEditor — assign / manage a client subscription ───────────────────
-const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) => {
+const PaymentEditor = ({ client, existingSub, onClose, currentUser, onClientUpdated }) => {
+  const { admins, loadAdmins, setDb } = useApp();
   const today = new Date().toISOString().slice(0, 10);
+  // Local state for editable assignments — persisted on change
+  const [assign, setAssign] = useState({
+    service_type: client.service_type || "full",
+    captador_id: client.captador_id || "",
+    entrenador_id: client.entrenador_id || "",
+  });
+  const [savingAssign, setSavingAssign] = useState(false);
+  // Ensure admins are loaded (in case context wasn't refreshed)
+  useEffect(() => { if (!admins || admins.length === 0) loadAdmins(); }, []);
   const [form, setForm] = useState(existingSub ? {
     plan_type: existingSub.plan_type || "mensual",
     price: existingSub.price || PLAN_PRICES[existingSub.plan_type] || 50,
@@ -3478,7 +3491,7 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
       const periodEnd = calcNextRenewal(periodStart, form.plan_type);
 
       // Compute split with current global config to get percentages
-      const split = computePaymentSplit(parseFloat(form.price) || 0, isFirst, client.captador_id, client.entrenador_id);
+      const split = computePaymentSplit(parseFloat(form.price) || 0, isFirst, assign.captador_id, assign.entrenador_id);
 
       // Insert payment history with split percentages persisted (immutable history)
       await sb.insert("payment_history", {
@@ -3489,8 +3502,8 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
         period_start: periodStart,
         period_end: periodEnd,
         is_first_payment: isFirst,
-        captador_id: client.captador_id || null,
-        entrenador_id: client.entrenador_id || null,
+        captador_id: assign.captador_id || null,
+        entrenador_id: assign.entrenador_id || null,
         paid_to: form.paid_to || null,
         payment_method: form.payment_method || null,
         split_app_pct: split.pctsUsed.app_pct,
@@ -3536,7 +3549,38 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
   };
 
   const isFirstPayment = history.length === 0;
-  const split = computePaymentSplit(form.price, isFirstPayment, client.captador_id, client.entrenador_id);
+  const split = computePaymentSplit(form.price, isFirstPayment, assign.captador_id, assign.entrenador_id);
+
+  // Save assignments to clients table + sync local db so other views update too.
+  // Called automatically when modality / captador / entrenador change.
+  const saveAssign = async (next) => {
+    setAssign(next);
+    setSavingAssign(true);
+    try {
+      // Update local db.clients so other tabs (header, profile) reflect change
+      setDb(p => ({
+        ...p,
+        clients: p.clients.map(c => c.id === client.id ? {
+          ...c,
+          service_type: next.service_type,
+          captador_id: next.captador_id,
+          entrenador_id: next.entrenador_id,
+        } : c),
+      }));
+      await sb.upsert("clients", {
+        id: client.id,
+        user_id: client.userId || client.id,
+        name: client.name,
+        email: client.email,
+        service_type: next.service_type || "full",
+        captador_id: next.captador_id || null,
+        entrenador_id: next.entrenador_id || null,
+      });
+    } catch (e) {
+      console.error("[PaymentEditor] saveAssign error:", e);
+    }
+    setSavingAssign(false);
+  };
 
   return (
     <div>
@@ -3548,15 +3592,54 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
         💰 {existingSub ? "Gestionar plan" : "Asignar plan"}: {client.name}
       </div>
       <div style={{ fontSize: 13, color: t.textSub, marginBottom: 18 }}>
-        Captador: {adminName(client.captador_id)} · Entrenador: {adminName(client.entrenador_id)}
+        Captador: {adminName(assign.captador_id)} · Entrenador: {adminName(assign.entrenador_id)}
       </div>
 
-      {!client.captador_id || !client.entrenador_id ? (
+      {!assign.captador_id || !assign.entrenador_id ? (
         <Card style={{ marginBottom: 16, background: "rgba(240,160,48,0.08)", border: "1.5px solid rgba(240,160,48,0.25)" }}>
           <div style={{ fontSize: 12, color: "#f0a030", fontWeight: 700, marginBottom: 4 }}>⚠️ Faltan datos para repartir</div>
-          <div style={{ fontSize: 11, color: t.textSub }}>Asigna captador y entrenador en el perfil del cliente para que el reparto se haga correctamente.</div>
+          <div style={{ fontSize: 11, color: t.textSub }}>Asigna captador y entrenador en el bloque de abajo para que el reparto se haga correctamente.</div>
         </Card>
       ) : null}
+
+      {/* Servicio + asignación admins */}
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: t.accent, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          💼 SERVICIO Y ASIGNACIONES
+          {savingAssign && <span style={{ fontSize: 10, color: t.textDim, fontWeight: 500, fontStyle: "italic" }}>guardando…</span>}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>MODALIDAD</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+            {[["training", "💪", "Solo entreno"], ["nutrition", "🥗", "Solo nutrición"], ["full", "⭐", "Completo"]].map(([val, em, lbl]) => (
+              <button key={val} onClick={() => saveAssign({ ...assign, service_type: val })}
+                style={{ background: assign.service_type === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${assign.service_type === val ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", color: assign.service_type === val ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                <span style={{ fontSize: 18 }}>{em}</span>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👋 CAPTADOR</div>
+          <select value={assign.captador_id || ""} onChange={e => saveAssign({ ...assign, captador_id: e.target.value })}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
+            <option value="">— Sin asignar —</option>
+            {(admins || []).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👨‍🏫 ENTRENADOR</div>
+          <select value={assign.entrenador_id || ""} onChange={e => saveAssign({ ...assign, entrenador_id: e.target.value })}
+            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
+            <option value="">— Sin asignar —</option>
+            {(admins || []).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+      </Card>
 
       {/* Form */}
       <Card style={{ marginBottom: 16 }}>
@@ -3656,11 +3739,11 @@ const PaymentEditor = ({ client, existingSub, onClose, currentUser, admins }) =>
           <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 6, marginTop: 4 }}>
             <div style={{ fontSize: 10, color: t.textDim, fontWeight: 700, marginBottom: 4 }}>POOL ADMINS ({split.adminPool} tk)</div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: t.textSub }}>👋 Captador {client.captador_id ? `(${adminName(client.captador_id)})` : "(sin asignar)"}</span>
+              <span style={{ color: t.textSub }}>👋 Captador {assign.captador_id ? `(${adminName(assign.captador_id)})` : "(sin asignar)"}</span>
               <strong style={{ color: t.text }}>{split.captador} tk</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-              <span style={{ color: t.textSub }}>👨‍🏫 Entrenador {client.entrenador_id ? `(${adminName(client.entrenador_id)})` : "(sin asignar)"}</span>
+              <span style={{ color: t.textSub }}>👨‍🏫 Entrenador {assign.entrenador_id ? `(${adminName(assign.entrenador_id)})` : "(sin asignar)"}</span>
               <strong style={{ color: t.text }}>{split.entrenador} tk</strong>
             </div>
           </div>
@@ -5218,6 +5301,7 @@ const AList = ({ clients, q, setQ, db, onSel, onNew, onDel, onLibrary, onErrors,
 };
 
 const ADetail = ({ client, db, setDb, onDel }) => {
+  const { admins } = useApp();
   const [tab, setTab] = useState("profile");
   const baseTabs = [
     { id: "profile", label: "Perfil" },
@@ -5232,8 +5316,12 @@ const ADetail = ({ client, db, setDb, onDel }) => {
   const visibleTabs = baseTabs.filter(t2 => t2.hideForService !== client.service_type);
   useEffect(() => { setTab("profile"); }, [client.id]);
 
-  // Helper to display admin name
+  // Helper to display admin name — looks first in admins (from context),
+  // falls back to db.users for backwards compatibility
   const adminName = (id) => {
+    if (!id) return "—";
+    const a = (admins || []).find(a => a.id === id);
+    if (a) return a.name;
     const u = (db.users || []).find(u => u.id === id);
     return u?.name || "—";
   };
@@ -5452,14 +5540,8 @@ const AEditProfile = ({ client, db, setDb }) => {
   const [resetDone, setResetDone] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [copied, setCopied] = useState(false);
-  const [admins, setAdmins] = useState([]);
 
   useEffect(() => { setF({...client}); setSaved(false); setResetDone(false); setNewPassword(""); }, [client.id]);
-  useEffect(() => {
-    (async () => {
-      try { const rows = await sb.select("admins", "?select=id,name"); setAdmins(rows || []); } catch {}
-    })();
-  }, []);
 
   const save = async () => {
     const vErr = validateAll([
@@ -5583,42 +5665,6 @@ const AEditProfile = ({ client, db, setDb }) => {
       <Field label="OBJETIVO" {...fld("goal")}/>
       <Field label="NOTAS PERSONALES" {...fld("personalNotes")} multiline rows={3}/>
       <Field label="LESIONES / LIMITACIONES" {...fld("injuries")} multiline rows={3}/>
-
-      {/* Servicio + asignación admins */}
-      <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14, marginTop: 8, marginBottom: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: t.accent, letterSpacing: "0.06em", marginBottom: 12 }}>💼 SERVICIO Y ASIGNACIONES</div>
-
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>MODALIDAD</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
-            {[["training", "💪", "Solo entreno"], ["nutrition", "🥗", "Solo nutrición"], ["full", "⭐", "Completo"]].map(([val, em, lbl]) => (
-              <button key={val} onClick={() => setF(p => ({ ...p, service_type: val }))}
-                style={{ background: f.service_type === val ? t.accentAlpha : t.bgElevated, border: `1.5px solid ${f.service_type === val ? "rgba(30,155,191,0.4)" : t.border}`, borderRadius: 10, padding: "10px 4px", cursor: "pointer", color: f.service_type === val ? t.accent : t.textSub, fontSize: 11, fontWeight: 700, fontFamily: "inherit", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                <span style={{ fontSize: 18 }}>{em}</span>
-                {lbl}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👋 CAPTADOR</div>
-          <select value={f.captador_id || ""} onChange={e => setF(p => ({ ...p, captador_id: e.target.value }))}
-            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
-            <option value="">— Sin asignar —</option>
-            {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </div>
-
-        <div>
-          <div style={{ color: t.textSub, fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", marginBottom: 7 }}>👨‍🏫 ENTRENADOR</div>
-          <select value={f.entrenador_id || ""} onChange={e => setF(p => ({ ...p, entrenador_id: e.target.value }))}
-            style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
-            <option value="">— Sin asignar —</option>
-            {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-        </div>
-      </div>
 
       <SaveBtn onSave={save} saved={saved}/>
     </div>
@@ -7391,7 +7437,7 @@ const ANotesTab = ({ client, notes, db, setDb }) => {
 };
 
 const ANewClient = ({ db, setDb, onDone, prefilled }) => {
-  const { currentUser } = useApp();
+  const { currentUser, admins } = useApp();
   const [f, setF] = useState({
     name: prefilled?.name || "",
     email: "",
@@ -7401,17 +7447,7 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
     service_type: "full",
   });
   const [copied, setCopied] = useState(false);
-  const [admins, setAdmins] = useState([]);
   const fld = k => ({ value: f[k], onChange: v => setF(p=>({...p,[k]:v})) });
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const rows = await sb.select("admins", "?select=id,name");
-        setAdmins(rows || []);
-      } catch {}
-    })();
-  }, []);
 
   const genPassword = () => {
     const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
@@ -7532,7 +7568,7 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
             <select value={f.captador_id || ""} onChange={e => setF(p => ({ ...p, captador_id: e.target.value }))}
               style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
               <option value="">— Sin asignar —</option>
-              {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              {(admins || []).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
 
@@ -7541,7 +7577,7 @@ const ANewClient = ({ db, setDb, onDone, prefilled }) => {
             <select value={f.entrenador_id || ""} onChange={e => setF(p => ({ ...p, entrenador_id: e.target.value }))}
               style={{ width: "100%", background: t.bgInput, border: `1.5px solid ${t.border}`, borderRadius: 12, padding: "12px 14px", color: t.text, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", appearance: "none" }}>
               <option value="">— Sin asignar —</option>
-              {admins.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              {(admins || []).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
         </div>
@@ -8934,6 +8970,7 @@ export default function App() {
   const [customFoods, setCustomFoods] = useState([]);
   const [customExercises, setCustomExercises] = useState([]);
   const [subscriptions, setSubscriptions] = useState([]);
+  const [admins, setAdmins] = useState([]);
 
   // Ensure viewport is set correctly for mobile (no pinch-zoom-out needed)
   useEffect(() => {
@@ -8971,6 +9008,13 @@ export default function App() {
     } catch {}
   }, []);
 
+  const loadAdmins = useCallback(async () => {
+    try {
+      const rows = await sb.select("admins", "?select=id,name,email,role&order=name");
+      if (rows) setAdmins(rows);
+    } catch {}
+  }, []);
+
   const loadFromSupabase = useCallback(async () => {
     setSyncing(true);
     setLoadError(false);
@@ -8992,6 +9036,7 @@ export default function App() {
       }
       await loadCustomFoods();
       await loadCustomExercises();
+      await loadAdmins();
       // Check renewal notifications (only run if currentUser is admin)
       if (currentUser && (currentUser.role === "admin" || currentUser.role === "superadmin")) {
         await checkRenewalNotifications(subscriptions || [], clients || []);
@@ -9001,7 +9046,7 @@ export default function App() {
       setLoadError(true);
     }
     setSyncing(false);
-  }, [loadCustomFoods, loadCustomExercises, currentUser]);
+  }, [loadCustomFoods, loadCustomExercises, loadAdmins, currentUser]);
 
   // Initial load on mount
   useEffect(() => {
@@ -9081,7 +9126,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises, subscriptions, setSubscriptions }}>
+      <Ctx.Provider value={{ currentUser, setCurrentUser, db, setDb, login, logout, syncing, loadFromSupabase, customFoods, loadCustomFoods, customExercises, loadCustomExercises, subscriptions, setSubscriptions, admins, loadAdmins }}>
         <GlobalStyles/>
         {!currentUser
           ? <Login/>
